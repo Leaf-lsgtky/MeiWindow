@@ -55,16 +55,25 @@ class BackGestureFilter(
                 return
             }
             candidates.forEachIndexed { i, method ->
+                logger(Log.INFO, "BACK_FILTER_HOOK_" + method.name, null)
                 module.hook(method)
                     .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                     .setId("bubbledrawer.back_gesture_corner_gate.$i")
                     .intercept { chain ->
                         val ev = chain.getArg(0) as? MotionEvent
-                        if (ev != null && ev.actionMasked == MotionEvent.ACTION_DOWN &&
-                            insideCornerBox(ev.rawX, ev.rawY)
-                        ) {
-                            logger(Log.INFO, "BACK_SUPPRESSED_IN_CORNER(${ev.rawX},${ev.rawY})", null)
-                            null // skip proceed: the plugin never registers this stroke
+                        if (ev != null && ev.actionMasked == MotionEvent.ACTION_DOWN) {
+                            val inside = insideCornerBox(ev.rawX, ev.rawY)
+                            logger(
+                                Log.INFO,
+                                "BACK_DOWN_SEEN(" + ev.rawX + "," + ev.rawY + ")inside=" + inside,
+                                null,
+                            )
+                            if (inside) {
+                                logger(Log.INFO, "BACK_SUPPRESSED_IN_CORNER", null)
+                                null // skip proceed: the plugin never registers this stroke
+                            } else {
+                                chain.proceed()
+                            }
                         } else {
                             chain.proceed()
                         }
