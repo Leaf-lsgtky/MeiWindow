@@ -131,6 +131,9 @@ class OverlayHost(
         dock.show(corner, screenW, screenH)
     }
 
+    /** SCREEN_OFF → retract the fan (original mo864f :1049-1056 → m9254Z). */
+    fun collapseAll() = dock.forceRetract()
+
     fun refresh() = attach()
 }
 

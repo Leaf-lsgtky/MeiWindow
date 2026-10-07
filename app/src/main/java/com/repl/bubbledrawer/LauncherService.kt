@@ -39,8 +39,16 @@ class LauncherService : android.app.Service() {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var host: OverlayHost? = null
 
+    // original: AppLauncherWindow.mo864f (:1049-1056) collapses the fan on SCREEN_OFF
+    private val screenOffReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_SCREEN_OFF) host?.collapseAll()
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        registerReceiver(screenOffReceiver, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF))
         val prefs = getSharedPreferences("pins", Context.MODE_PRIVATE)
         val pinStore = AppGraph.pinStore ?: PinStore(PrefsPinBackend(prefs)).also { AppGraph.pinStore = it }
         val repo = AppGraph.repo ?: AppRepository(this).also { AppGraph.repo = it }
@@ -74,6 +82,7 @@ class LauncherService : android.app.Service() {
     override fun onBind(intent: Intent?) = null
 
     override fun onDestroy() {
+        try { unregisterReceiver(screenOffReceiver) } catch (_: Exception) {}
         host?.detach()
         host = null
         AppGraph.serviceRunning = false
