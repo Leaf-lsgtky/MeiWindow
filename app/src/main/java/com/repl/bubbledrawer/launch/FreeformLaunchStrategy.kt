@@ -9,23 +9,23 @@ import com.repl.bubbledrawer.pinyin.BubbleApp
 
 /**
  * "Stay on the current page" launch: asks the system to open the app in a
- * FREEFORM desktop window ABOVE the calling page — the portable analogue of the
+ * freeform desktop window ABOVE the calling page — the portable analogue of the
  * Flyme flow (SlideLaunchAppSettings/MoreAppWindow launch via
  * `AppLauncherWindow.m9253Y` with bundle `start_windowmode=true` :792-810, and
  * the framework floats the app over the still-visible selection page).
  *
- * How it works on stock Android 15/16 ("desktop windowing"):
- *  - public: `ActivityOptions.setLaunchBounds(rect)` — honoured as "open this
- *    activity in a freeform window of these bounds" when the device's desktop
- *    windowing is enabled, ignored (fullscreen) otherwise;
- *  - @hide via reflection: `setLaunchWindowingMode(WINDOWING_MODE_FREEFORM = 1)`
- *    — works where the ODM/dev-option gate "Enable freeform windows" is on.
- * Both are best-effort: ANY SecurityException/Rejection falls back to a normal
- * fullscreen launch, so behaviour never regresses below FullscreenLaunchStrategy.
- *
- * Real in-window embedding (app drawn inside our own page, no separate window)
- * is impossible for third-party apps — Android forbids hosting other apps'
- * Activities in-process; the closest the OS allows IS the freeform float above.
+ * Two vendor paths, then a generic path, then fullscreen fallback:
+ *  1. HyperOS/MIUI: `android.util.MiuiMultiWindowUtils.getActivityOptions(ctx,
+ *     pkg, true, false)` — VERIFIED in the decompiled target SystemUI 17.03:
+ *     AppMiniWindowManagerImpl$launchMiniWindowActivity$1.java:133 is exactly
+ *     this call (plus setFreeformAnimation(false), line 135) before
+ *     PendingIntent.send(..., bundle). Static framework util → reflectable from
+ *     any app; the framework may still gate the actual freeform switch for
+ *     non-system callers (LSPosed phase lifts that fully).
+ *  2. AOSP 15/16 "desktop windowing": public `setLaunchBounds(rect)` honoured
+ *     as freeform when desktop mode is enabled; @hide
+ *     `setLaunchWindowingMode(1)` where the ODM gate is on.
+ *  3. Anything rejected → plain fullscreen launch (never worse than v0.1).
  */
 class FreeformLaunchStrategy : ILaunchStrategy {
 
@@ -39,13 +39,11 @@ class FreeformLaunchStrategy : ILaunchStrategy {
                 )
             } ?: return false
 
-        val opts = ActivityOptions.makeBasic()
-        applyFreeformHints(context, opts)
+        val opts = miuiOptions(context, app.packageName) ?: aospOptions(context)
         return try {
             context.startActivity(intent, opts.toBundle())
             true
         } catch (_: Exception) {
-            // device rejected freeform — plain fullscreen launch
             try {
                 context.startActivity(intent)
                 true
@@ -55,7 +53,19 @@ class FreeformLaunchStrategy : ILaunchStrategy {
         }
     }
 
-    private fun applyFreeformHints(context: Context, opts: ActivityOptions) {
+    /** HyperOS path — MiuiMultiWindowUtils.getActivityOptions(ctx, pkg, true, false). */
+    private fun miuiOptions(context: Context, pkg: String): ActivityOptions? = runCatching {
+        Class.forName("android.util.MiuiMultiWindowUtils")
+            .getMethod(
+                "getActivityOptions",
+                Context::class.java, String::class.java,
+                Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType,
+            )
+            .invoke(null, context, pkg, true, false) as? ActivityOptions
+    }.getOrNull()
+
+    private fun aospOptions(context: Context): ActivityOptions {
+        val opts = ActivityOptions.makeBasic()
         val dm: DisplayMetrics = context.resources.displayMetrics
         val w = (dm.widthPixels * 0.62f).toInt()
         val h = (dm.heightPixels * 0.62f).toInt()
@@ -68,6 +78,7 @@ class FreeformLaunchStrategy : ILaunchStrategy {
                 .getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
                 .invoke(opts, 1)
         }
+        return opts
     }
 }
 
@@ -77,7 +88,7 @@ class ConfigurableLaunchStrategy(private val context: Context) : ILaunchStrategy
     private val freeform = FreeformLaunchStrategy()
     private val fullscreen = FullscreenLaunchStrategy()
 
-    override fun launch(ctx: Context, app: com.repl.bubbledrawer.pinyin.BubbleApp): Boolean {
+    override fun launch(ctx: Context, app: BubbleApp): Boolean {
         val useFreeform = com.repl.bubbledrawer.bubble.BubbleConfig(context).freeform
         return (if (useFreeform) freeform else fullscreen).launch(ctx, app)
     }

@@ -15,7 +15,6 @@ import com.repl.bubbledrawer.data.LaunchCountStore
 import com.repl.bubbledrawer.data.PinStore
 import com.repl.bubbledrawer.gesture.Corner
 import com.repl.bubbledrawer.launch.ILaunchStrategy
-import com.repl.bubbledrawer.more.MoreAppsActivity
 
 /**
  * The role Flyme's `AppLauncherWindow` (WindowModeSlidGesture) plays around the
@@ -51,10 +50,12 @@ class BubbleDockController(
                         LaunchCountStore.increment(context, item.app.packageName)
                     }
                     GestureAppLauncher.AdapterItem.More -> {
-                        // "更多" tile → 更多应用 page (MoreAppWindow port; its 管理
-                        // button leads to 选择快捷启动的应用 — the original chain)
+                        // VERIFIED: original fan's trailing "更多" tile (C2821f.mo3456G
+                        // :294-317) launches SlideLaunchAppSettings (选择/管理合一页,
+                        // 带 A–Z 索引条) — NOT MoreAppWindow. Per user ruling the two
+                        // pages merge: the manage page IS the "更多" destination.
                         context.startActivity(
-                            Intent(context, MoreAppsActivity::class.java)
+                            Intent(context, com.repl.bubbledrawer.pin.PinManageActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                         )
                     }
@@ -132,8 +133,21 @@ class BubbleDockController(
             is GestureAppLauncher.AdapterItem.AppItem -> icon.setImageDrawable(repo.icon(item.app))
             GestureAppLauncher.AdapterItem.More -> icon.setImageResource(R.drawable.icon_gesture_more_app)
         }
+        // ORIGINAL: the adapter sets a click listener on every tile
+        // (C2937F.m9712g :142 → C2937F$a.onClick :56-69 → mo9283j(item, view, reason=1)),
+        // so with the panel open a plain TAP on an icon launches it without any drag.
+        // (The corner-drag path launches via m9729p→m9736y with reason=0 instead.)
+        v.setOnClickListener { launcher.clickSelect(item, v) }
         return v
     }
+
+    /**
+     * Fresh DOWN on void while the fan is open — verbatim C2822g.onTouchEvent
+     * :381-393: DOWN → m9254Z() (close: m9245P → m9738l retract) + onGestureCanceled(1)
+     * (stats-only in the original, :1096-1098; our onGestureCanceled maps to the same
+     * retract, so one call is equivalent). ACTION_POINTER_DOWN :383-385 is ignored.
+     */
+    fun onVoidTouchDown() = retractAfterAction()
 
     fun forward(ev: MotionEvent, pointerId: Int): Boolean {
         val r = launcher.forwardEvent(ev, pointerId)

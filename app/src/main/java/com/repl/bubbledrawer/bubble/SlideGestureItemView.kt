@@ -78,13 +78,16 @@ class SlideGestureItemView @JvmOverloads constructor(
 
     override fun dispatchSetPressed(pressed: Boolean) {
         super.dispatchSetPressed(pressed)
-        // ring colour = @color/slide_gesture_app_circle_icon_bg_color (#40ffffff),
-        // resolved at draw so DayNight config changes pick it up (SlideGestureItemView :148)
+        // VERIFIED handoff direction, original dispatchSetPressed :202-222:
+        //   pressed=true  → checks the COLLAPSE (1→0) anim; running → pend expand to its end
+        //   pressed=false → checks the EXPAND (0→1) anim; running → pend collapse to its end
+        // (previous port had the two checks swapped → two ValueAnimators writing `progress`
+        // concurrently on fast hover churn: ring jumped/stuck.)
         if (pressed) {
-            if (expandAnim?.isRunning == true) pending = runExpand
+            if (collapseAnim?.isRunning == true) pending = runExpand
             else { pending = null; startExpand() }
         } else {
-            if (collapseAnim?.isRunning == true) pending = runCollapse
+            if (expandAnim?.isRunning == true) pending = runCollapse
             else { pending = null; startCollapse() }
         }
     }

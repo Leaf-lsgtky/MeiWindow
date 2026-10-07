@@ -34,11 +34,6 @@
         </activity>
 
         <activity
-            android:name=".more.MoreAppsActivity"
-            android:exported="false"
-            android:label="@string/gesture_more_app_window_title" />
-
-        <activity
             android:name=".pin.PinManageActivity"
             android:exported="false"
             android:label="@string/slide_launch_app_settings_title" />

@@ -526,8 +526,14 @@ class GestureAppLauncher @JvmOverloads constructor(
         val idx = hoveredIndex
         if (idx == -1) return
         val item = adapter?.items?.getOrNull(idx) ?: return
-        callback?.onItemSelected(item, getChildAt(idx), idx)
+        callback?.onItemSelected(item, getChildAt(idx), 0)   // reason 0 = drag-release select
         // original stats bubble_click (AbstractC2811x) — no-op here
+    }
+
+    /** C2937F$a.onClick :56-69 → AppLauncherWindow.mo9283j(item, view, 1):
+     *  plain TAP on an open tile launches it (reason 1 = click), no drag involved. */
+    fun clickSelect(item: AdapterItem, view: View) {
+        callback?.onItemSelected(item, view, 1)
     }
 
     // ---------------- GestureDetector (:729-838) ----------------
