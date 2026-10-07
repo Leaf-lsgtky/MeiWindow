@@ -1,9 +1,9 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- port of decompiled app_settings_item_selected.xml: rl_selected_apps (minHeight 78dp,
-     marginTop 12dp / marginBottom 20dp) + click_add_tip (TipsSummary 14sp, marginTop 40dp,
-     centered). The AppDragLayout child is flattened into the grid's ★ cells, so this row
-     renders the empty-state hint only (visibility rule SlideLaunchAppSettings.java:1034 —
-     shown exactly when the pinned list is empty). -->
+<!-- EmptyHint cell: pinned-area cell host mirroring rl_selected_apps
+     (minHeight 78dp — AppDragLayout keeps its height even while empty,
+     app_settings_item_selected.xml:8; marginTop 12dp / marginBottom 20dp)
+     and holding ONLY the click_add_tip hint (TipsSummary 14sp, marginTop 40dp,
+     centered; visibility rule SlideLaunchAppSettings.java:1034 — this row exists
+     exactly when the pinned list is empty; the ★ chips live in dedicated cells). -->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/rl_selected_apps"
     android:layout_width="match_parent"
