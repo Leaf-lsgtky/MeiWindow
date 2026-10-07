@@ -31,6 +31,7 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 | MzX（AloneTabContainer/MzRecyclerView…）+ libpag | androidx/material 等价物；.pag 演示动画不搬 | 厂商私有依赖 |
 | `C4411f` 触感/`AicyPicker` 推荐 | 公开 haptic；本地启动计数 Top8 作"推荐"组 | 私有服务不可移植 |
 | 贴边独占角落 | 内缩 32dp 默认；"贴边模式"经 root 关系统手势 inset | 与系统返回手势共存 |
+| `persistent=true` 常驻（systemui 共享进程） | 前台服务 specialUse + `BootReceiver`（持久化"用户意图"开关，重启自动恢复，用户关掉则不拉起） | 普通应用可达的最接近行为 |
 
 ## 结构
 
@@ -43,3 +44,11 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - `root/EdgeModeHelper.kt` — 贴边模式 su 命令；`settings/MainActivity.kt` — 权限引导/调参/预览
 
 测试为整体轮跑：`.\gradlew.bat :app:testDebugUnitTest`（拼音/分组/状态机冒烟，非逐任务 TDD——按约定精简）。
+
+## 已知限制（v0.1）
+
+- **角落带内的轻点不透传**：非特权 overlay 无法把已接管的 DOWN"事后归还"下层。斜滑手势不受影响；
+  软键盘首键恰落在带内时，调小"宽/高"滑杆、改"仅左/右角"，或打字前从通知暂停服务即可。
+  彻底解法为二期：无障碍服务探测输入法窗口时临时禁用角落带（原版是系统级监听器，无此问题）。
+- 气泡条悬浮在游戏/通话等全屏界面之上仍可见（二期：前台包名黑名单）。
+- "推荐"组为本地启动计数 Top8（原版 SmartRecommend 服务不可移植）。
