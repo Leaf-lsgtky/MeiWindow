@@ -52,8 +52,10 @@ class CornerGestureDetector(
                 // up-dominant diagonal, flyme slide distance met
                 -dy >= triggerDistancePx && inward && -dy >= kotlin.math.abs(dx) * 0.5f
             }
-            Corner.SIDE_LEFT -> -dx >= triggerDistancePx && kotlin.math.abs(dy) < -dx * 0.5f
-            Corner.SIDE_RIGHT -> dx >= triggerDistancePx && kotlin.math.abs(dy) < dx * 0.5f
+            // side midpoints: horizontal inward swipe (left edge → dx>0, right edge → dx<0),
+            // vertical drift must stay small so plain edge-back is untouched
+            Corner.SIDE_LEFT -> dx >= triggerDistancePx && kotlin.math.abs(dy) < dx * 0.5f
+            Corner.SIDE_RIGHT -> -dx >= triggerDistancePx && kotlin.math.abs(dy) < -dx * 0.5f
         }
         if (accepted) {
             state = State.TRIGGERED
