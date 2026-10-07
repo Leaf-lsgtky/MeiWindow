@@ -146,6 +146,21 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { toggleEdgeMode() }
         })
 
+        // freeform ("小窗启动") toggle — where the device supports desktop/freeform
+        // windows the app floats over the current page; otherwise fullscreen
+        add(CheckBox(this).apply {
+            setText(R.string.freeform_toggle)
+            isChecked = config.freeform
+            setOnCheckedChangeListener { _, checked ->
+                config.freeform = checked
+                Toast.makeText(
+                    this@MainActivity,
+                    getString(R.string.freeform_hint),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        })
+
         add(Button(this).apply {
             text = getString(R.string.preview)
             setOnClickListener { preview() }

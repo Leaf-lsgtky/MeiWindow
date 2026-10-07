@@ -37,6 +37,15 @@ class BubbleConfig(context: Context) {
         get() = prefs.getBoolean("edge_mode", false)
         set(v) = prefs.edit().putBoolean("edge_mode", v).apply()
 
+    /**
+     * Launch apps in a freeform floating window above the current page when the
+     * device supports it (see FreeformLaunchStrategy); falls back to fullscreen.
+     * Mirrors flyme's `start_windowmode=true` on the slide-gesture/settings launches.
+     */
+    var freeform: Boolean
+        get() = prefs.getBoolean("freeform", false)
+        set(v) = prefs.edit().putBoolean("freeform", v).apply()
+
     fun zones(screenW: Int, screenH: Int, density: Float): List<CornerZone> {
         val ins = insetDp * density
         val w = widthDp * density

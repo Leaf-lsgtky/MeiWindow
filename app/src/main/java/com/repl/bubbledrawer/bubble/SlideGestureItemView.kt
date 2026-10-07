@@ -36,7 +36,10 @@ class SlideGestureItemView @JvmOverloads constructor(
 
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = RING_COLOR // slide_gesture_app_circle_icon_bg_color #40ffffff
+        // original: getResources().getColor(slide_gesture_app_circle_icon_bg_color) (:148)
+        color = androidx.core.content.ContextCompat.getColor(
+            context, com.repl.bubbledrawer.R.color.slide_gesture_app_circle_icon_bg_color,
+        )
     }
 
     private var iconRadius = 0f
@@ -75,11 +78,13 @@ class SlideGestureItemView @JvmOverloads constructor(
 
     override fun dispatchSetPressed(pressed: Boolean) {
         super.dispatchSetPressed(pressed)
+        // ring colour = @color/slide_gesture_app_circle_icon_bg_color (#40ffffff),
+        // resolved at draw so DayNight config changes pick it up (SlideGestureItemView :148)
         if (pressed) {
-            if (collapseAnim?.isRunning == true) pending = runExpand
+            if (expandAnim?.isRunning == true) pending = runExpand
             else { pending = null; startExpand() }
         } else {
-            if (expandAnim?.isRunning == true) pending = runCollapse
+            if (collapseAnim?.isRunning == true) pending = runCollapse
             else { pending = null; startCollapse() }
         }
     }
@@ -122,9 +127,5 @@ class SlideGestureItemView @JvmOverloads constructor(
             ringPaint.strokeWidth = w
             canvas.drawCircle(measuredWidth / 2f, measuredHeight / 2f, iconRadius + w * 0.5f, ringPaint)
         }
-    }
-
-    companion object {
-        const val RING_COLOR = 0x40FFFFFF.toInt()
     }
 }

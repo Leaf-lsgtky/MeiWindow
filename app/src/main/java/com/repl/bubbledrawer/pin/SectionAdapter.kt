@@ -110,7 +110,8 @@ class PinGridAdapter(
             else R.drawable.app_launcher_item_add_icon,
         )
         holder.badge.visibility = if (manageMode) View.VISIBLE else View.INVISIBLE
-        holder.itemView.setOnClickListener { if (manageMode) onClick(app) }
+        // C3010u.m9935g: manage mode → tap toggles pin; view mode → tap launches the app
+        holder.itemView.setOnClickListener { onClick(app) }
         holder.itemView.setOnLongClickListener {
             if (manageMode && pinned) { onPinDragStart(holder); true } else false
         }

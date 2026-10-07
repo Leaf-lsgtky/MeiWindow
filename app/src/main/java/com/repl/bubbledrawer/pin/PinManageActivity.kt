@@ -52,7 +52,7 @@ class PinManageActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_pin_manage)
-        title = getString(R.string.slide_launch_app_settings_title)
+        // ActionBar title = manifest label (选择快捷启动的应用, decompiled string "title")
 
         findViewById<com.google.android.material.tabs.TabLayout>(R.id.tab_container)
             .addTab(
@@ -130,7 +130,15 @@ class PinManageActivity : AppCompatActivity() {
             cells = cells,
             manageMode = manageMode,
             iconOf = repo::icon,
-            onClick = { app -> togglePin(app) },
+            onClick = { app ->
+                if (manageMode) togglePin(app)
+                else {
+                    // view-mode tap launches (flyme: 功能-tab click → AbstractC2806s.m9105e
+                    // with start_windowmode=true over the still-visible page)
+                    com.repl.bubbledrawer.launch.ConfigurableLaunchStrategy(this).launch(this, app)
+                    com.repl.bubbledrawer.data.LaunchCountStore.increment(this, app.packageName)
+                }
+            },
             onPinDragStart = { vh -> touchHelper.startDrag(vh) },
         )
         this.adapter = adapter

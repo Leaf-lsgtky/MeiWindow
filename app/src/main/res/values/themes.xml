@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- original AppTheme: Light + windowBackground=?colorSurfaceBright + forceDarkAllowed
+         (night = framework recolor). We use a real DayNight theme + fd_sys_* tokens
+         (day #ffffff / night #17171a from decompiled values) — equivalent result. -->
     <style name="Theme.BubbleDrawer" parent="Theme.Material3.DayNight">
-        <item name="android:windowBackground">?attr/colorSurface</item>
+        <item name="android:windowBackground">@color/fd_sys_color_surface_bright_default</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+
+    <style name="Theme.BubbleDrawer.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
     </style>
 </resources>

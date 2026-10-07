@@ -34,6 +34,8 @@
     <string name="edge_on">已开启（手势系统 inset 已关）</string>
     <string name="edge_off">关闭</string>
     <string name="edge_needs_root">贴边模式需要 root 或三键导航</string>
+    <string name="freeform_toggle">小窗启动（支持的设备上悬浮于当前页）</string>
+    <string name="freeform_hint">需系统支持：开发者选项开启“桌面模式/自由窗口”，或 Android 16 桌面窗口。不支持时自动回退全屏。</string>
     <string name="preview">预览气泡条</string>
     <string name="open_manage">打开固定管理</string>
 </resources>

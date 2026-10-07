@@ -14,7 +14,7 @@ import com.repl.bubbledrawer.data.AppRepository
 import com.repl.bubbledrawer.data.PinStore
 import com.repl.bubbledrawer.data.PrefsPinBackend
 import com.repl.bubbledrawer.gesture.Corner
-import com.repl.bubbledrawer.launch.FullscreenLaunchStrategy
+import com.repl.bubbledrawer.launch.ConfigurableLaunchStrategy
 import com.repl.bubbledrawer.overlay.OverlayHost
 import com.repl.bubbledrawer.settings.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -52,7 +52,7 @@ class LauncherService : android.app.Service() {
         val prefs = getSharedPreferences("pins", Context.MODE_PRIVATE)
         val pinStore = AppGraph.pinStore ?: PinStore(PrefsPinBackend(prefs)).also { AppGraph.pinStore = it }
         val repo = AppGraph.repo ?: AppRepository(this).also { AppGraph.repo = it }
-        val dock = BubbleDockController(this, repo, pinStore, FullscreenLaunchStrategy())
+        val dock = BubbleDockController(this, repo, pinStore, ConfigurableLaunchStrategy(this))
         host = OverlayHost(this, BubbleConfig(this), dock)
         scope.launch { repo.loadAll() } // warm the list for the first swipe
     }

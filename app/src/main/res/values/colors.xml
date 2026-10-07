@@ -2,11 +2,14 @@
 <resources>
     <!-- values copied verbatim from decompiled values/colors.xml (spec §6.5) -->
     <color name="fd_sys_color_on_surface_default">#000000</color>
+    <color name="fd_sys_color_surface_bright_default">#ffffff</color>
     <color name="fd_sys_color_on_surface_variant_default">#993c3c43</color>
     <color name="fd_sys_color_surface_container_highest_default">#664d4d4d</color>
     <color name="fd_sys_color_outline_variant_default">#0d000000</color>
     <color name="slide_gesture_app_circle_icon_bg_color">#40ffffff</color>
     <color name="mc_fast_scroll_letter_color_default">#cccccc</color>
+    <color name="mc_fastscroll_letter_overlay_text_color">#ffffff</color>
+    <color name="fd_sys_color_scrim_default">#1a000000</color>
     <color name="fastscroller_overlay_textcolor">#ffffffff</color>
     <color name="app_item_title_color">#e6000000</color>
     <color name="app_item_title_more_app_color">#ff000000</color>

@@ -1,8 +1,11 @@
 package com.repl.bubbledrawer.bubble
 
+import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -30,6 +33,15 @@ class BubbleDockController(
     var isBusy = false
         private set
 
+    /** Fan shown/hidden signal → host dims/undims the scrim window. */
+    var onShownChanged: ((Boolean) -> Unit)? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val autoRetract = Runnable { forceRetract() }
+
+    /** Preview mode (no live finger): auto-collapse like a released gesture. */
+    var previewMode = false
+
     init {
         launcher.setCallback(object : GestureAppLauncher.Callback {
             override fun onItemSelected(item: GestureAppLauncher.AdapterItem, view: View, index: Int) {
@@ -50,8 +62,21 @@ class BubbleDockController(
             }
 
             override fun onGestureCanceled(reason: Int) = retractAfterAction()
-            override fun onExpandStarted() { isBusy = true }
+
+            override fun onExpandStarted() {
+                isBusy = true
+                onShownChanged?.invoke(true)
+                schedulePreviewTimeout()
+            }
         })
+    }
+
+    private fun schedulePreviewTimeout() {
+        mainHandler.removeCallbacks(autoRetract)
+        if (previewMode) {
+            // a real finger ends with UP/CANCEL; a preview has none — end it after 4s
+            mainHandler.postDelayed(autoRetract, 4000)
+        }
     }
 
     /** @param screenH full-screen height in px (the launcher window is MATCH_PARENT). */
@@ -68,9 +93,14 @@ class BubbleDockController(
                 else R.dimen.slide_gesture_launcher_item_radius_no_nav_bar,
             ),
         )
-        // m9237F :497-504 — navbar: radius277/deg0, no navbar (full-screen apps): 242/deg3
         launcher.setSafeDegrees(if (navbar) 0 else 3)
-        launcher.setCenterPosition(screenH.toFloat()) // :863-866 → onLayout → auto-expand :793
+        launcher.setCenterPosition(screenH.toFloat())
+    }
+
+    /** Finger events end (UP/CANCEL forwarded) → stop the preview timer. */
+    fun onGestureFinished() {
+        previewMode = false
+        mainHandler.removeCallbacks(autoRetract)
     }
 
     private fun hasNavBar(): Boolean {
@@ -95,7 +125,7 @@ class BubbleDockController(
     private fun itemView(item: GestureAppLauncher.AdapterItem): View {
         val v = LayoutInflater.from(context)
             .inflate(R.layout.slide_gesture_list_item, launcher, false)
-        v.layoutParams = GestureAppLauncher.LayoutParams() // circle bounds set in onMeasure
+        v.layoutParams = GestureAppLauncher.LayoutParams()
         val icon = v.findViewById<de.hdodenhof.circleimageview.CircleImageView>(R.id.slide_icon)
         when (item) {
             is GestureAppLauncher.AdapterItem.AppItem -> icon.setImageDrawable(repo.icon(item.app))
@@ -104,16 +134,31 @@ class BubbleDockController(
         return v
     }
 
-    fun forward(ev: MotionEvent, pointerId: Int) = launcher.forwardEvent(ev, pointerId)
+    fun forward(ev: MotionEvent, pointerId: Int): Boolean {
+        val r = launcher.forwardEvent(ev, pointerId)
+        if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+            onGestureFinished()
+        }
+        return r
+    }
 
     private fun retractAfterAction() {
         launcher.retract(object : AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: android.animation.Animator) { isBusy = false }
-            override fun onAnimationStart(animation: android.animation.Animator) { isBusy = false }
+            override fun onAnimationStart(animation: Animator) { shown(false) }
+            override fun onAnimationEnd(animation: Animator) { shown(false) }
         })
+        onGestureFinished()
     }
 
-    fun forceRetract() = launcher.retract(null)
+    private fun shown(v: Boolean) {
+        isBusy = launcher.state != 0
+        if (!v) onShownChanged?.invoke(false)
+    }
 
-    fun destroy() = launcher.removeAllViews()
+    fun forceRetract() = retractAfterAction()
+
+    fun destroy() {
+        mainHandler.removeCallbacks(autoRetract)
+        launcher.removeAllViews()
+    }
 }

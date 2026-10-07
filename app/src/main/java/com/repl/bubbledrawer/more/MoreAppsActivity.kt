@@ -71,7 +71,8 @@ class MoreAppsActivity : AppCompatActivity() {
     }
 
     private fun onCellClick(app: BubbleApp) {
-        FullscreenLaunchStrategy().launch(this, app)   // :125 (start_windowmode 11 → 全屏占位)
+        // :125 (原版 start_windowmode 11) — freeform when enabled, fullscreen fallback
+        com.repl.bubbledrawer.launch.ConfigurableLaunchStrategy(this).launch(this, app)
         LaunchCountStore.increment(this, app.packageName)
     }
 
