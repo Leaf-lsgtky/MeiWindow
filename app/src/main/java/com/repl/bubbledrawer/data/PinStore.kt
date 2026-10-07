@@ -52,17 +52,24 @@ class PinStore(private val backend: PinBackend) {
     fun pins(): List<PinnedRef> = PinCodec.decode(backend.read())
 
     fun setPins(list: List<PinnedRef>) {
-        backend.write(PinCodec.encode(list.take(PinCodec.MAX_PINS)))
+        // no storage cap — original writes the full ordered list; the fan truncates
+        // to the first 6 at display time (AppLauncherWindow.m9235C :448-466)
+        backend.write(PinCodec.encode(list))
         onPinsChanged?.invoke(pins())
     }
 
+    /**
+     * ORIGINAL: the settings page writes ANY number of pinned apps to
+     * `long_press_app` (no cap at insert time); the cap is applied only when the
+     * fan is built — `AppLauncherWindow.m9235C` takes the FIRST 6 + "更多" tile
+     * (:448-466 `i6>=6 break`). So toggling here must NOT reject on count.
+     */
     fun toggle(app: BubbleApp): Boolean {
         val cur = pins().toMutableList()
         val ref = PinnedRef(app.packageName, app.userId)
         return if (cur.remove(ref)) {
             setPins(cur); false
         } else {
-            if (cur.size >= PinCodec.MAX_PINS) return false // caller toasts 最多固定6个
             cur.add(ref); setPins(cur); true
         }
     }

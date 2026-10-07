@@ -51,7 +51,8 @@ class BubbleDockController(
                         LaunchCountStore.increment(context, item.app.packageName)
                     }
                     GestureAppLauncher.AdapterItem.More -> {
-                        // original: MoreAppWindow launched as its own window; we start the Activity
+                        // "更多" tile → 更多应用 page (MoreAppWindow port; its 管理
+                        // button leads to 选择快捷启动的应用 — the original chain)
                         context.startActivity(
                             Intent(context, MoreAppsActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),

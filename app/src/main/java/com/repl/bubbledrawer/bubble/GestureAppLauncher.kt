@@ -204,6 +204,9 @@ class GestureAppLauncher @JvmOverloads constructor(
     private fun playExpand() {
         cachedTops = ArrayList()   // :461 fresh lists each start — the jitter channels
         cachedLefts = ArrayList()  // :462 run BEFORE they fill, hence no-op reads guarded below
+        if (centerY == -1f) alpha = 0f   // cold start from hidden: original window begins at
+                                         // default alpha 1 and its expand anim drives 0→1;
+                                         // after our collapse leaves 0, reset the same way
         var set = expandSet
         if (set == null) {
             val j: Long = MotionSpec.EXPAND_PHASE1 // j6 = 130 (:467)

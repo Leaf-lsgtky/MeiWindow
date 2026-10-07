@@ -99,14 +99,20 @@ class LetterIndexBar @JvmOverloads constructor(
 
     private inner class BarColumn(context: Context) : View(context) {
 
+        // ORIGINAL C4424c :469: f15588v = AbstractC0058i.m284d(ctx, 12px-dimen) and
+        // m284d = TypedValue.applyDimension(COMPLEX_UNIT_SP, 12, dm) → 12 SP, not 12px!
+        private val textPx = android.util.TypedValue.applyDimension(
+            android.util.TypedValue.COMPLEX_UNIT_SP, 12f, resources.displayMetrics,
+        )
+
         private val normalPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = Paint.Align.CENTER
-            textSize = 12f                       // 12px (mc_fastscroll_letter_text_size)
+            textSize = textPx
         }
         private val currentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = -1                           // f15586t = 0xFFFFFFFF (white, literal in code)
             textAlign = Paint.Align.CENTER
-            textSize = 12f
+            textSize = textPx
         }
         private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
@@ -143,9 +149,10 @@ class LetterIndexBar @JvmOverloads constructor(
             setMeasuredDimension((barW + padRight).toInt(), MeasureSpec.getSize(heightMeasureSpec))
         }
 
-        /** pitch = 12px + 4dp (:373), shrunk to fit when screen is short (:226 logic). */
+        /** pitch = textPx + 4dp (C4424c :539-542 rect height = textSize + space),
+         *  shrunk to fit when the screen is short (:226 logic). */
         private fun pitch(): Float {
-            val natural = 12f + vSpace
+            val natural = textPx + vSpace
             val usable = height.toFloat()
             val total = letters.size * natural
             return if (usable > 0 && total > usable) usable / letters.size else natural

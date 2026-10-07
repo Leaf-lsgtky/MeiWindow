@@ -152,16 +152,10 @@ class PinManageActivity : AppCompatActivity() {
     }
 
     private fun togglePin(app: BubbleApp) {
-        val pins = pinStore.pins().toMutableList()
-        val ref = PinnedRef(app.packageName, app.userId)
-        if (!pins.remove(ref)) {
-            if (pins.size >= PinCodec.MAX_PINS) {
-                Toast.makeText(this, getString(R.string.max_pin_tips, PinCodec.MAX_PINS), Toast.LENGTH_SHORT).show()
-                return
-            }
-            pins.add(ref)
-        }
-        pinStore.setPins(pins)
+        // ORIGINAL: no cap at the manage page — any number can be added; the fan
+        // shows the first 6 + 更多 (m9235C :453-457). SlideLaunchAppSettings source
+        // contains no size>=6 check (grepped).
+        pinStore.toggle(app)
         rebuild()
     }
 
