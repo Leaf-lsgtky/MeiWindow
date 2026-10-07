@@ -24,6 +24,16 @@ class ModuleMain : XposedModule() {
             log(Log.WARN, TAG, "MODULE_SKIPPED_UNEXPECTED_PROCESS")
             return
         }
+        // Exempt the input-monitor classes we reflect into (android.view.InputMonitor
+        // is @hide; PilferGuard needs getMethod("getName")/pilferPointers on it).
+        // Prefix matches the class signature "Landroid/view/InputMonitor...;"
+        // (AndroidHiddenApiBypass setHiddenApiExemptions semantics, Helper.java).
+        val exempted = runCatching {
+            org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions(
+                "Landroid/view/InputMonitor;",
+            )
+        }.getOrDefault(false)
+        log(if (exempted) Log.INFO else Log.WARN, TAG, "HIDDEN_API_EXEMPT=$exempted")
         val properties = getFrameworkProperties()
         if (properties and XposedInterface.PROP_CAP_REMOTE == 0L) {
             log(Log.WARN, TAG, "MODULE_CONFIG_REMOTE_UNAVAILABLE")

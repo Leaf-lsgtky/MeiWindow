@@ -132,6 +132,7 @@ class CornerInputMonitor(
             onStreamEnd = { cancelled ->
                 mainHandler.post { if (cancelled) fan?.cancelExternal() }
             },
+            onStrokeEnd = { claimed -> strokeEndSink?.invoke(claimed) },
             trace = { message -> logger(Log.INFO, "SPY_${side.name}_$message", null) },
         )
         try {
@@ -155,6 +156,17 @@ class CornerInputMonitor(
             SpySide.RIGHT -> settings.right
         }
 
+    /**
+     * Every corner stroke that had ARMED the drawer ends through this sink with
+     * whether the drawer CLAIMED it. Wired by SystemUiHookInstaller to
+     * PilferGuard: claimed → drop the pending native hand-off (the drawer owns
+     * the stream; the commit guard suppresses the late native triggerBack);
+     * unclaimed (plain vertical back swipe, straight-inward drag, 2nd finger) →
+     * hand the stream to the back monitor whose pilfer we swallowed, so native
+     * BACK keeps working everywhere the drawer did not take over.
+     */
+    var strokeEndSink: ((claimed: Boolean) -> Unit)? = null
+
     /** Screen-space membership for the back-gesture corner gate: a DOWN starting
      *  inside an ENABLED, laid-out spy box must not be registered by the native
      *  back plugin (it belongs to the drawer — flyme semantics). Fail open on
@@ -174,6 +186,27 @@ class CornerInputMonitor(
             }
         }
         return false
+    }
+
+    /** True while ANY corner view is mid-stroke (armed or claimed). Used by
+     *  PilferGuard to keep HyperOS's native edge-back monitor from stealing the
+     *  stream we are already evaluating. Both our DOWN handler and the native
+     *  pilfer run on the SystemUI main looper, and the DOWN trace precedes the
+     *  CANCEL trace by 6–22 ms on device, so this flag is set before the steal. */
+    fun isCornerStreamActive(): Boolean = bindings.values.any { it.view.streamActive }
+
+    /** True only for strokes WE claimed for the fan (or ended <grace ago): the
+     *  native monitor still sees the full stream through its own channel even
+     *  when our guard blocked its pilfer, so it may try to commit BACK for a
+     *  gesture the drawer already owns. An UNCLAIMED corner stroke — a plain
+     *  upward swipe — never marks this and commits BACK exactly as before. */
+    fun isCornerCommitWindow(): Boolean {
+        val now = android.os.SystemClock.uptimeMillis()
+        return bindings.values.any {
+            (it.view.streamActive && it.view.claimActive) ||
+                (it.view.lastClaimedEndUptime != 0L &&
+                    now - it.view.lastClaimedEndUptime <= COMMIT_GRACE_MS)
+        }
     }
 
     /** SystemUiCornerInputMonitor.pilferPointers (:170-184) verbatim flow. */
@@ -239,6 +272,7 @@ class CornerInputMonitor(
         private val onActivate: (screenX: Float, screenY: Float) -> Unit,
         private val onStream: (MotionEvent) -> Unit,
         private val onStreamEnd: (cancelled: Boolean) -> Unit,
+        private val onStrokeEnd: (claimed: Boolean) -> Unit,
         private val trace: (String) -> Unit,
     ) : View(ctx) {
         private val engine = CornerGestureEngine()
@@ -251,6 +285,18 @@ class CornerInputMonitor(
 
         val streamActive: Boolean get() = tracking
 
+        /** current claim state for the commit guard (true while a claimed stroke is mid-flight) */
+        val claimActive: Boolean get() = claimed
+
+        /** uptime ms of the moment a CLAIMED stroke ended (0 = never). The native
+         *  edge handler's UP for the same stroke may be dispatched slightly AFTER
+         *  ours on the same looper; the commit guard keeps a short grace window so
+         *  that late triggerBack() is suppressed too. UNCLAIMED strokes never mark
+         *  this — a plain upward back swipe must still commit BACK normally (flyme
+         *  arbitration: not diagonal = not the drawer's). */
+        var lastClaimedEndUptime: Long = 0L
+            private set
+
         init {
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             setWillNotDraw(true)
@@ -260,8 +306,15 @@ class CornerInputMonitor(
             if (!event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) {
                 trace("NON_TOUCHSOURCE src=${event.source}")
                 val wasActive = tracking
+                val wasClaimed = claimed
                 resetTracking()
-                if (wasActive) onStreamEnd(true)
+                if (wasActive) {
+                    if (wasClaimed) {
+                        markClaimedEnd()
+                        onStreamEnd(true)
+                    }
+                    onStrokeEnd(wasClaimed)
+                }
                 return true
             }
             when (event.actionMasked) {
@@ -306,8 +359,10 @@ class CornerInputMonitor(
                 MotionEvent.ACTION_MOVE -> {
                     if (tracking) {
                         if (!canClaim()) {
+                            val wasClaimed = claimed
                             resetTracking()
-                            onStreamEnd(true)
+                            if (wasClaimed) onStreamEnd(true)
+                            onStrokeEnd(wasClaimed)
                             return true
                         }
                         val config = activeConfig
@@ -337,7 +392,13 @@ class CornerInputMonitor(
                                 val wasClaimed = claimed
                                 trace("ENGINE_CANCEL claimed=$wasClaimed")
                                 resetTracking()
-                                if (wasClaimed) onStreamEnd(true) // pull-back beyond reverseTolerance
+                                if (wasClaimed) {
+                                    markClaimedEnd()
+                                    onStreamEnd(true)
+                                }
+                                // unclaimed here = vertical-dominant / pulled back /
+                                // ambiguous: PilferGuard hands the stream to native.
+                                onStrokeEnd(wasClaimed)
                             }
                             else -> Unit // PassThrough — still observing, app keeps its stream
                         }
@@ -349,8 +410,12 @@ class CornerInputMonitor(
                     engine.cancel()
                     if (wasClaimed) {
                         resetTracking()
+                        markClaimedEnd()
                         onStreamEnd(true)
                     }
+                    // second finger = never the drawer: hand the stream back NOW
+                    // (native decides on its own UP/CANCEL afterwards)
+                    onStrokeEnd(wasClaimed)
                 }
 
                 MotionEvent.ACTION_UP -> {
@@ -367,7 +432,11 @@ class CornerInputMonitor(
                     }
                     resetTracking()
                     // unclaimed UP = the app's own gesture ended — nothing to tell the fan
-                    if (wasClaimed) onStreamEnd(false)
+                    if (wasClaimed) {
+                        markClaimedEnd()
+                        onStreamEnd(false)
+                    }
+                    if (wasTracking) onStrokeEnd(wasClaimed)
                 }
 
                 MotionEvent.ACTION_CANCEL -> {
@@ -376,7 +445,11 @@ class CornerInputMonitor(
                         val wasClaimed = claimed
                         engine.cancel()
                         resetTracking()
-                        if (wasClaimed) onStreamEnd(true)
+                        if (wasClaimed) {
+                            markClaimedEnd()
+                            onStreamEnd(true)
+                        }
+                        onStrokeEnd(wasClaimed)
                     }
                 }
             }
@@ -406,11 +479,20 @@ class CornerInputMonitor(
             claimed = false
             pilferAttempted = false
         }
+
+        private fun markClaimedEnd() {
+            lastClaimedEndUptime = android.os.SystemClock.uptimeMillis()
+        }
     }
 
     companion object {
         const val INPUT_FEATURE_SPY = 1 shl 2          // reference :363
         const val CORNER_WINDOW_TYPE = 2024            // reference :364 (TYPE_ACCESSIBILITY_OVERLAY)
         const val CORNER_INPUT_CHANNEL_TITLE = "BubbleDrawer-corner-spy" // reference :365
+
+        /** grace after a corner stroke ends during which the native back handler's
+         *  late commit attempt for the SAME stroke is still suppressed (main-looper
+         *  dispatch ordering; measured steal was 6–22 ms). */
+        const val COMMIT_GRACE_MS = 300L
     }
 }

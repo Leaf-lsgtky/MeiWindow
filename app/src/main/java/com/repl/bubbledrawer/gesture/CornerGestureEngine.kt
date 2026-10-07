@@ -127,6 +127,14 @@ class CornerGestureEngine {
         val upward = originY - y
         if (inward < -config.reverseTolerance || upward < -config.reverseTolerance) return cancel()
         if (!isClaimed) {
+            // HyperOS arbitration: a clearly VERTICAL-dominant swipe from the
+            // corner is a plain BACK, not the drawer — release it as early as
+            // possible (finger still down) so the native back monitor, whose
+            // pilfer PilferGuard swallowed for exactly this decision window,
+            // gets the stream back in time. Mirrors MiuiBackGestureHook's
+            // horizontal-intent gate (`outward >= abs(vertical)/2`), inverted:
+            // here upward ≥ 2×inward once past the inward threshold = vertical.
+            if (upward > config.inwardThreshold && upward >= 2f * inward) return cancel()
             if (inward < config.inwardThreshold || upward < config.upwardThreshold) {
                 return SpyAction.PassThrough
             }

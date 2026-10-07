@@ -49,6 +49,12 @@ dependencies {
     implementation("androidx.annotation:annotation:1.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("de.hdodenhof:circleimageview:3.1.0")
+    // hidden-API exemption (user-provided; Maven Central artifact, no runtime deps —
+    // pom verified 2026-10-08). Used for android.view.InputMonitor reflection in
+    // PilferGuard; the class is @hide and HyperOS may enforce restrictions even for
+    // the system-UID SystemUI process. Same pin as E:\workspace\ios16\hypermirror
+    // (gradle/libs.versions.toml:92-94, v6.1).
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
     // libxposed API 102 — versions pinned to the FlymeFreeform reference (gradle/libs.versions.toml:7-8)
     compileOnly("io.github.libxposed:api:102.0.0")
     implementation("io.github.libxposed:service:102.0.0")

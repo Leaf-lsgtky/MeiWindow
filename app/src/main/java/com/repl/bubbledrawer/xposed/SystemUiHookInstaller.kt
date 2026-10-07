@@ -19,7 +19,6 @@ class SystemUiHookInstaller(
 ) {
     private val bound = AtomicBoolean(false)
     private var inputMonitor: CornerInputMonitor? = null
-    private var backFilter: BackGestureFilter? = null
     private var appClassLoader: ClassLoader? = null
 
     fun install(classLoader: ClassLoader) {
@@ -68,16 +67,24 @@ class SystemUiHookInstaller(
             inputMonitor = monitor
             monitor.start()
             module.log(Log.INFO, TAG, "SYSTEMUI_CORNER_SPY_READY")
-            // back-gesture corner gate — SystemUI's own ClassLoader (install param)
-            val cl = appClassLoader
-            if (cl != null) {
-                val filter = BackGestureFilter(module, cl, { x, y ->
-                    monitor.isInsideCornerBox(x, y)
-                }) { priority, message, error ->
-                    module.log(priority, TAG, message, error)
-                }
-                filter.install()
-                backFilter = filter
+            // The REAL steal path inside apps: HyperOS's edge-swipe monitor
+            // (android.view.InputMonitor.pilferPointers, zero args) takes the
+            // stream 6–22 ms after a corner DOWN — before our diagonal
+            // thresholds can claim. The guard SWALLOWS that steal for the
+            // duration of a corner stroke, then arbitrates: claimed → the
+            // drawer owns the stream (and the late native triggerBack is
+            // suppressed); unclaimed → the stream is handed back so native
+            // BACK keeps working for every gesture the drawer did not take.
+            val guard = PilferGuard(
+                module,
+                { monitor.isCornerStreamActive() },
+                { monitor.isCornerCommitWindow() },
+            ) { priority, message, error ->
+                module.log(priority, TAG, message, error)
+            }
+            guard.install(appClassLoader ?: context.classLoader)
+            monitor.strokeEndSink = { claimed ->
+                if (claimed) guard.discardHandoff() else guard.handOffToNative()
             }
         } catch (exception: ReflectiveOperationException) {
             module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_API_UNAVAILABLE", exception)
