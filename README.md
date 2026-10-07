@@ -51,4 +51,7 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
   软键盘首键恰落在带内时，调小"宽/高"滑杆、改"仅左/右角"，或打字前从通知暂停服务即可。
   彻底解法为二期：无障碍服务探测输入法窗口时临时禁用角落带（原版是系统级监听器，无此问题）。
 - 气泡条悬浮在游戏/通话等全屏界面之上仍可见（二期：前台包名黑名单）。
+- **边缘指示条未复刻**：原版 `window_slide_indicator.xml`（20×64dp pill）在 SystemUITools 代码中零引用——
+  它由 SystemUI（手势区主人）绘制，非本 APK 行为；复刻不拥有系统手势区，画常驻 pill 反而偏离原版。
+  素材已按 `.9.png` 原名保留在 `res/drawable-*dpi/`，二期若做自绘指示条直接用。
 - "推荐"组为本地启动计数 Top8（原版 SmartRecommend 服务不可移植）。
