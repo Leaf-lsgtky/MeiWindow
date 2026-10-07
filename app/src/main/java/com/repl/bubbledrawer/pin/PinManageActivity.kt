@@ -104,7 +104,9 @@ class PinManageActivity : AppCompatActivity() {
                     val c = a.cells.getOrNull(i)
                     if (c is Cell.Label) { cur = c.text; break }
                 }
-                if (cur != null && cur != bar.currentLetter) bar.currentLetter = cur
+                // above the first section = the ★ pinned area (original marks it ★, :326)
+                if (cur == null) cur = "★"
+                if (cur != bar.currentLetter) bar.currentLetter = cur
             }
         })
 
@@ -136,7 +138,9 @@ class PinManageActivity : AppCompatActivity() {
             override fun getSpanSize(position: Int) = adapter.spanAt(position.coerceIn(0, (adapter.itemCount - 1).coerceAtLeast(0)))
         }
         list.adapter = adapter
-        bar.letters = Sections.labelsOf(cells).distinct()
+        // ★ is the top marker in the original bar (setCurrentLetter("★"), :326);
+        // group labels follow in display order
+        bar.letters = (listOf("★") + Sections.labelsOf(cells)).distinct()
     }
 
     private fun togglePin(app: BubbleApp) {
@@ -155,7 +159,8 @@ class PinManageActivity : AppCompatActivity() {
 
     private fun scrollToLetter(letter: String) {
         val a = adapter ?: return
-        val pos = a.cells.indexOfFirst { (it as? Cell.Label)?.text == letter }
+        val pos = if (letter == "★") 0 // ★ area sits at the very top (head + pins)
+        else a.cells.indexOfFirst { (it as? Cell.Label)?.text == letter }
         if (pos >= 0) list.scrollToPosition(pos)
     }
 

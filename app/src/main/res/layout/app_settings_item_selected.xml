@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- port of decompiled app_settings_item_selected.xml: rl_selected_apps (minHeight 78dp,
+     marginTop 12dp / marginBottom 20dp) + click_add_tip (TipsSummary 14sp, marginTop 40dp,
+     centered). The AppDragLayout child is flattened into the grid's ★ cells, so this row
+     renders the empty-state hint only (visibility rule SlideLaunchAppSettings.java:1034 —
+     shown exactly when the pinned list is empty). -->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/rl_selected_apps"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="@dimen/fd_sys_margin_regular"
+    android:layout_marginBottom="@dimen/fd_sys_margin_large"
+    android:minHeight="78dp">
+
+    <TextView
+        android:textColor="@color/fd_sys_color_surface_container_highest_default"
+        android:textSize="14sp"
+        android:id="@+id/click_add_tip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="40dp"
+        android:text="@string/settings_tips_click_to_add_app"
+        android:includeFontPadding="false"
+        android:layout_centerHorizontal="true"/>
+</RelativeLayout>

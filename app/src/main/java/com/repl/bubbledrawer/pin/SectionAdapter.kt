@@ -29,14 +29,15 @@ class PinGridAdapter(
 
     companion object {
         const val TYPE_PIN_HEAD = 0
-        const val TYPE_LABEL = 1
-        const val TYPE_PIN = 2
-        const val TYPE_APP = 3
+        const val TYPE_EMPTY = 1
+        const val TYPE_LABEL = 2
+        const val TYPE_PIN = 3
+        const val TYPE_APP = 4
     }
 
-    /** span 4 for head/label rows, 1 for apps (set on GridLayoutManager). */
+    /** span 4 for head/label/empty rows, 1 for apps (set on GridLayoutManager). */
     fun spanAt(position: Int) = when (cells[position]) {
-        is Cell.PinHead, is Cell.Label -> 4
+        is Cell.PinHead, is Cell.Label, is Cell.EmptyHint -> 4
         else -> 1
     }
 
@@ -62,12 +63,14 @@ class PinGridAdapter(
 
     override fun getItemViewType(position: Int) = when (cells[position]) {
         is Cell.PinHead -> TYPE_PIN_HEAD
+        is Cell.EmptyHint -> TYPE_EMPTY
         is Cell.Label -> TYPE_LABEL
         is Cell.Pin -> TYPE_PIN
         is Cell.App -> TYPE_APP
     }
 
     class PinHeadVH(v: View) : RecyclerView.ViewHolder(v)
+    class EmptyVH(v: View) : RecyclerView.ViewHolder(v)
     class LabelVH(v: View) : RecyclerView.ViewHolder(v) {
         val category: TextView = v.findViewById(R.id.app_category)
     }
@@ -82,6 +85,7 @@ class PinGridAdapter(
         val inflater = LayoutInflater.from(parent.context)
         return when (viewType) {
             TYPE_PIN_HEAD -> PinHeadVH(inflater.inflate(R.layout.app_settings_item_head, parent, false))
+            TYPE_EMPTY -> EmptyVH(inflater.inflate(R.layout.app_settings_item_selected, parent, false))
             TYPE_LABEL -> LabelVH(inflater.inflate(R.layout.app_settings_item_all_header, parent, false))
             else -> CellVH(inflater.inflate(R.layout.launcher_app_item, parent, false))
         }
@@ -91,6 +95,7 @@ class PinGridAdapter(
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         when (val cell = cells[position]) {
             is Cell.PinHead -> Unit // static texts baked into the xml head row
+            is Cell.EmptyHint -> Unit // 暂无已添加应用 baked into app_settings_item_selected.xml
             is Cell.Label -> (holder as LabelVH).category.text = cell.text
             is Cell.Pin -> bindApp(holder as CellVH, cell.app, pinned = true)
             is Cell.App -> bindApp(holder as CellVH, cell.app, pinned = false)

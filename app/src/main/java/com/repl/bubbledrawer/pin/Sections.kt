@@ -16,6 +16,8 @@ import com.repl.bubbledrawer.pinyin.BubbleApp
  */
 sealed interface Cell {
     data object PinHead : Cell                 // 已添加 + 长按拖动图标以排序 (app_settings_item_head)
+    data object EmptyHint : Cell               // 暂无已添加应用 (app_settings_item_selected click_add_tip,
+                                               // visibility VISIBLE(0) only while pins empty — :1034)
     data class Label(val text: String) : Cell  // ★/推荐/A..Z/# group header
     data class Pin(val app: BubbleApp) : Cell  // pinned slot, drag-reorderable
     data class App(val app: BubbleApp) : Cell  // regular grid cell
@@ -34,10 +36,16 @@ object Sections {
         val out = ArrayList<Cell>()
 
         out.add(Cell.PinHead)
-        out.add(Cell.Label("★"))
-        for (ref in pins) {
-            all.firstOrNull { it.packageName == ref.packageName && it.userId == ref.userId }
-                ?.let { out.add(Cell.Pin(it)) }
+        if (pins.isEmpty()) {
+            // SlideLaunchAppSettings:1034 — click_add_tip VISIBLE(0) only while empty
+            out.add(Cell.EmptyHint)
+        } else {
+            // no "★" text row in the original: the ★ area is AppDragLayout right below
+            // the 已添加 head; ★ exists only as the index-bar current marker (:326)
+            for (ref in pins) {
+                all.firstOrNull { it.packageName == ref.packageName && it.userId == ref.userId }
+                    ?.let { out.add(Cell.Pin(it)) }
+            }
         }
 
         if (recommend) {

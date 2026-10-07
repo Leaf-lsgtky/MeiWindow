@@ -23,7 +23,7 @@
 
     <TextView
         android:textColor="@color/fd_sys_color_surface_container_highest_default"
-        android:textSize="13sp"
+        android:textSize="14sp"
         android:id="@+id/drag_sort_tip"
         android:paddingTop="@dimen/head_item_padding_top"
         android:layout_width="wrap_content"
