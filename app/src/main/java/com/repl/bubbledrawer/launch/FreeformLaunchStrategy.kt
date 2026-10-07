@@ -83,13 +83,15 @@ class FreeformLaunchStrategy : ILaunchStrategy {
 }
 
 /** Reads the user's 小窗启动 toggle at launch time (flyme parity: every bubble
- *  launch carries `start_windowmode`; our fallback is honest fullscreen). */
+ *  launch carries `start_windowmode`; our fallback is honest fullscreen).
+ *  The toggle lives in the module's shared prefs (SettingsStore writes through
+ *  to the LSPosed remote group; the local mirror keeps it usable offline). */
 class ConfigurableLaunchStrategy(private val context: Context) : ILaunchStrategy {
     private val freeform = FreeformLaunchStrategy()
     private val fullscreen = FullscreenLaunchStrategy()
 
     override fun launch(ctx: Context, app: BubbleApp): Boolean {
-        val useFreeform = com.repl.bubbledrawer.bubble.BubbleConfig(context).freeform
+        val useFreeform = com.repl.bubbledrawer.xposed.SettingsStore.snapshot(context).freeform
         return (if (useFreeform) freeform else fullscreen).launch(ctx, app)
     }
 }

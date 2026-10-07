@@ -18,24 +18,17 @@
     <string name="slide_launch_app_settings_title">选择快捷启动的应用</string>
 
     <!-- app-specific (not part of the replica surface) -->
-    <string name="service_running">角落手势服务运行中</string>
-    <string name="channel_name">角落手势</string>
-    <string name="max_pin_tips">最多固定 %1$d 个</string>
-    <string name="enable_service">启用角落手势</string>
-    <string name="grant_overlay">授予悬浮窗权限</string>
-    <string name="perm_overlay_missing">请先授予悬浮窗权限</string>
-    <string name="zone_title">触发区（内缩 / 宽 / 高）</string>
+    <string name="enable_service">启用角落手势（需 LSPosed 模块激活）</string>
+    <string name="module_status">模块状态：%1$s</string>
+    <string name="module_connected">已连接（%1$s）</string>
+    <string name="module_disconnected">未连接：请在 LSPosed 中启用本模块并勾选 SystemUI，然后重启 SystemUI</string>
+    <string name="module_howto">角落手势与扇形面板运行在系统界面（SystemUI）进程内：安装本 APK 后，在 LSPosed 中启用模块、作用域勾选「系统界面」（com.android.systemui），重启 SystemUI 即生效；设置改动实时同步，无需重启。系统原生贴边返回手势不受影响——只有明确的内滑上提才会被接管。</string>
+    <string name="range_title">触发区半径（自贴边角落的 1/4 圆，px=dp×密度）</string>
     <string name="trigger_pos">触发位置</string>
     <string name="pos_both">底部双侧</string>
     <string name="pos_left">仅左角</string>
     <string name="pos_right">仅右角</string>
-    <string name="pos_side">侧边中部</string>
-    <string name="edge_mode">贴边模式</string>
-    <string name="edge_on">已开启（手势系统 inset 已关）</string>
-    <string name="edge_off">关闭</string>
-    <string name="edge_needs_root">贴边模式需要 root 或三键导航</string>
     <string name="freeform_toggle">小窗启动（支持的设备上悬浮于当前页）</string>
     <string name="freeform_hint">需系统支持：开发者选项开启“桌面模式/自由窗口”，或 Android 16 桌面窗口。不支持时自动回退全屏。</string>
-    <string name="preview">预览气泡条</string>
     <string name="open_manage">打开固定管理</string>
 </resources>

@@ -2,12 +2,19 @@ package com.repl.bubbledrawer
 
 import android.app.Application
 
-/** Process-singleton graph (overlay service + activities share one process). */
+/**
+ * App-process graph. The fan itself now lives INSIDE SystemUI (xposed/FanHost);
+ * this process is pure settings/management and talks to the module through
+ * RemoteBridge's mirrored SharedPreferences (xposed/RemotePrefs.GROUP).
+ */
 object AppGraph {
     @Volatile var pinStore: com.repl.bubbledrawer.data.PinStore? = null
     @Volatile var repo: com.repl.bubbledrawer.data.AppRepository? = null
-    @Volatile var previewRequested = false
-    @Volatile var serviceRunning = false
 }
 
-class BubbleAppApplication : android.app.Application()
+class BubbleAppApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        com.repl.bubbledrawer.xposed.RemoteBridge.start(this)
+    }
+}

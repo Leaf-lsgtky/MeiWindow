@@ -27,6 +27,9 @@ class BubbleDockController(
     private val repo: AppRepository,
     private val pinStore: PinStore,
     private val launchStrategy: ILaunchStrategy,
+    /** Optional external tile factory (FanHost builds tiles in code inside SystemUI);
+     *  falls back to inflating slide_gesture_list_item in our own process. */
+    private val viewFactory: GestureAppLauncher.ViewFactory? = null,
 ) {
     val launcher = GestureAppLauncher(context)
     var isBusy = false
@@ -54,9 +57,16 @@ class BubbleDockController(
                         // :294-317) launches SlideLaunchAppSettings (选择/管理合一页,
                         // 带 A–Z 索引条) — NOT MoreAppWindow. Per user ruling the two
                         // pages merge: the manage page IS the "更多" destination.
+                        // Explicit ComponentName by PACKAGE STRING: the caller may be
+                        // the SystemUI-hosted fan whose Context reports a different
+                        // package, and Intent(context, cls) would misattribute it.
                         context.startActivity(
-                            Intent(context, com.repl.bubbledrawer.pin.PinManageActivity::class.java)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            Intent().setComponent(
+                                android.content.ComponentName(
+                                    com.repl.bubbledrawer.xposed.ModuleResources.MODULE_PACKAGE,
+                                    "com.repl.bubbledrawer.pin.PinManageActivity",
+                                ),
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                         )
                     }
                 }
@@ -85,7 +95,9 @@ class BubbleDockController(
     fun show(corner: Corner, screenW: Int, screenH: Int) {
         val side = if (corner == Corner.BOTTOM_RIGHT || corner == Corner.SIDE_RIGHT) 1 else 0
         launcher.setAdapter(
-            GestureAppLauncher.SlideAdapter(buildItems()) { item, _ -> itemView(item) },
+            GestureAppLauncher.SlideAdapter(buildItems()) { item, index ->
+                viewFactory?.create(item, index) ?: itemView(item)
+            },
         )
         launcher.setLayoutSide(side)
         val navbar = hasNavBar()

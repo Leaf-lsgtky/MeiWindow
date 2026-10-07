@@ -24,6 +24,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    // Xposed module metadata must stay verbatim inside the APK (LSPosed reads it)
+    // — same packaging rule as the FlymeFreeform reference (app/build.gradle.kts:42-46).
+    packaging {
+        resources {
+            merges += "META-INF/xposed/*"
+        }
+    }
 }
 
 kotlin {
@@ -41,5 +49,8 @@ dependencies {
     implementation("androidx.annotation:annotation:1.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("de.hdodenhof:circleimageview:3.1.0")
+    // libxposed API 102 — versions pinned to the FlymeFreeform reference (gradle/libs.versions.toml:7-8)
+    compileOnly("io.github.libxposed:api:102.0.0")
+    implementation("io.github.libxposed:service:102.0.0")
     testImplementation("junit:junit:4.13.2")
 }

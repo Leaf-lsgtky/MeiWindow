@@ -15,7 +15,6 @@ import com.repl.bubbledrawer.data.AppRepository
 import com.repl.bubbledrawer.data.PinCodec
 import com.repl.bubbledrawer.data.PinStore
 import com.repl.bubbledrawer.data.PinnedRef
-import com.repl.bubbledrawer.data.PrefsPinBackend
 import com.repl.bubbledrawer.pinyin.BubbleApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +39,7 @@ class PinManageActivity : AppCompatActivity() {
     private val repo by lazy { AppGraph.repo ?: AppRepository(this).also { AppGraph.repo = it } }
     private val pinStore by lazy {
         AppGraph.pinStore ?: PinStore(
-            PrefsPinBackend(getSharedPreferences("pins", MODE_PRIVATE)),
+            com.repl.bubbledrawer.xposed.SettingsStore.pinBackend(this),
         ).also { AppGraph.pinStore = it }
     }
 
