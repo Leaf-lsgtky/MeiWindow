@@ -18,6 +18,7 @@ import com.repl.bubbledrawer.data.LaunchCountStore
 import com.repl.bubbledrawer.launch.FullscreenLaunchStrategy
 import com.repl.bubbledrawer.pin.PinManageActivity
 import com.repl.bubbledrawer.pinyin.BubbleApp
+import kotlinx.coroutines.launch
 import de.hdodenhof.circleimageview.CircleImageView
 
 /**
@@ -51,7 +52,16 @@ class MoreAppsActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         val list = findViewById<RecyclerView>(R.id.slide_more_list)
-        list.adapter = MoreAppAdapter(buildCells(), repo::icon, ::onCellClick, ::onAddClick) // :235-249
+        val cells = buildCells()
+        list.adapter = MoreAppAdapter(cells, repo::icon, ::onCellClick, ::onAddClick) // :235-249
+        if (cells.isEmpty() && repo.cachedAll().isEmpty()) {
+            // cold start without the service having warmed the list yet
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
+                .launch {
+                    repo.loadAll()
+                    list.adapter = MoreAppAdapter(buildCells(), repo::icon, ::onCellClick, ::onAddClick)
+                }
+        }
     }
 
     /** m9494r (:135-149) */

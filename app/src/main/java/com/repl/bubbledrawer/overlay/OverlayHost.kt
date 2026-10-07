@@ -147,7 +147,14 @@ class ZoneView(context: Context, private val zone: CornerZone) : android.view.Vi
     }
 
     var listener: Listener? = null
-    private val detector = CornerGestureDetector(listOf(zone))
+    // thresholds in px: flyme slide trigger = slide_trigger_scroll_distance 50dp (:944);
+    // diagonal component 20dp per design spec §4.2
+    private val d = context.resources.displayMetrics.density
+    private val detector = CornerGestureDetector(
+        zones = listOf(zone),
+        triggerDistancePx = 50f * d,
+        minSidePx = 20f * d,
+    )
     private var tracking = false
     private var accepted = false
     private val loc = IntArray(2)
