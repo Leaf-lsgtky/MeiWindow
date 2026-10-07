@@ -96,7 +96,12 @@ object RemoteBridge {
             .putBoolean(RemotePrefs.KEY_RIGHT, snap.right)
             .putInt(RemotePrefs.KEY_RANGE_DP, snap.rangeDp)
             .putBoolean(RemotePrefs.KEY_FREEFORM, snap.freeform)
-            .apply()
+            .commit() // synchronous: LSPosed mirrors the group only after the write lands
+        Log.i(
+            "BubbleDrawer",
+            "BRIDGE_PUSHED enabled=" + snap.enabled + " left=" + snap.left +
+                " right=" + snap.right + " range=" + snap.rangeDp,
+        )
         if (!target.contains(com.repl.bubbledrawer.data.PrefsPinBackend.KEY)) {
             migrateLegacyPins(context, target)
         }

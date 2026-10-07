@@ -86,6 +86,13 @@ class CornerInputMonitor(
         settings = RemotePrefs.read(prefs)
         updateSide(SpySide.LEFT, settings.enabled && settings.left)
         updateSide(SpySide.RIGHT, settings.enabled && settings.right)
+        // change-only trace (fires on remote preference notifications)
+        logger(
+            Log.INFO,
+            "PREFS_APPLIED enabled=" + settings.enabled + " left=" + settings.left +
+                " right=" + settings.right + " range=" + settings.rangeDp,
+            null,
+        )
     }
 
     private fun updateSide(side: SpySide, shouldExist: Boolean) {
