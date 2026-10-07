@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- verbatim port of decompiled res/layout/launcher_more_app_item.xml
+     (MzRecyclerView → RecyclerView; InterceptHapticRLayout → plain RelativeLayout,
+      haptics handled in code; circleimageview kept — public lib) -->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <RelativeLayout
+        android:layout_width="@dimen/launcher_more_app_item_width"
+        android:layout_height="wrap_content"
+        android:minHeight="@dimen/launcher_more_app_item_height"
+        android:layout_centerHorizontal="true">
+
+        <de.hdodenhof.circleimageview.CircleImageView
+            android:id="@+id/app_icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginTop="9dp"
+            android:scaleType="centerCrop"
+            android:layout_centerHorizontal="true"/>
+
+        <TextView
+            android:textColor="@color/app_item_title_more_app_color"
+            android:textSize="12sp"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:id="@+id/title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:layout_below="@+id/app_icon"
+            android:fallbackLineSpacing="false"/>
+    </RelativeLayout>
+</RelativeLayout>

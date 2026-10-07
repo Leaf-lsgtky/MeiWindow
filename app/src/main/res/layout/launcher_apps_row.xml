@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- horizontal 4-slot row hosting launcher_app_item cells (original nests a
+     4-col MzRecyclerView per section: app_settings_item_all.xml:16-19; flattened
+     to one row per visual line, identical appearance) -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="horizontal"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+</LinearLayout>

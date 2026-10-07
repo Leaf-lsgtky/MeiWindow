@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- decompiled app_settings_item_head.xml verbatim (已添加 + 拖动排序提示) -->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingHorizontal="@dimen/fd_sys_margin_large">
+
+    <LinearLayout
+        android:id="@+id/more_app"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentStart="true">
+        <TextView
+            android:textColor="@color/fd_sys_color_on_surface_variant_default"
+            android:textSize="14sp"
+            android:fontFamily="sans-serif-medium"
+            android:paddingTop="@dimen/head_item_padding_top"
+            android:paddingBottom="@dimen/fd_sys_margin_small"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/slide_launch_app_has_selected"/>
+    </LinearLayout>
+
+    <TextView
+        android:textColor="@color/fd_sys_color_surface_container_highest_default"
+        android:textSize="13sp"
+        android:id="@+id/drag_sort_tip"
+        android:paddingTop="@dimen/head_item_padding_top"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/slide_app_settings_drag_tips"
+        android:layout_alignParentEnd="true"/>
+</RelativeLayout>

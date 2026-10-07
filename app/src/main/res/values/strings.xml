@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- zh-rCN strings copied verbatim from decompiled values-zh-rCN/strings.xml -->
+    <string name="app_name">气泡抽屉</string>
+    <string name="gesture_more_app_window_title">更多应用</string>
+    <string name="more_app_window_add_app">添加应用</string>
+    <string name="more_item_label">更多</string>
+    <string name="recommend">推荐</string>
+    <string name="slide_launcher_recent_title">最近</string>
+    <string name="slide_launcher_recent_clear">清除</string>
+    <string name="settings_tips_click_to_add_app">暂无已添加应用</string>
+    <string name="slide_app_settings_drag_tips">长按拖动图标以排序</string>
+    <string name="slide_launch_app_has_selected">已添加</string>
+    <string name="slide_launcher_tab_all_app">应用</string>
+    <string name="slide_launcher_tab_all_shortcut">功能</string>
+    <string name="action_app_manager">管理</string>
+    <string name="action_app_manager_complate">完成</string>
+    <string name="slide_launch_app_settings_title">选择快捷启动的应用</string>
+
+    <!-- app-specific (not part of the replica surface) -->
+    <string name="service_running">角落手势服务运行中</string>
+    <string name="channel_name">角落手势</string>
+    <string name="max_pin_tips">最多固定 %1$d 个</string>
+    <string name="enable_service">启用角落手势</string>
+    <string name="grant_overlay">授予悬浮窗权限</string>
+    <string name="perm_overlay_missing">请先授予悬浮窗权限</string>
+    <string name="zone_title">触发区（内缩 / 宽 / 高）</string>
+    <string name="trigger_pos">触发位置</string>
+    <string name="pos_both">底部双侧</string>
+    <string name="pos_left">仅左角</string>
+    <string name="pos_right">仅右角</string>
+    <string name="pos_side">侧边中部</string>
+    <string name="edge_mode">贴边模式</string>
+    <string name="edge_on">已开启（手势系统 inset 已关）</string>
+    <string name="edge_off">关闭</string>
+    <string name="edge_needs_root">贴边模式需要 root 或三键导航</string>
+    <string name="preview">预览气泡条</string>
+    <string name="open_manage">打开固定管理</string>
+</resources>

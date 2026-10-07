@@ -1,0 +1,35 @@
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:processDebugNavigationResources
+> Task :app:parseDebugLocalResources
+> Task :app:generateDebugRFile
+
+> Task :app:compileDebugKotlin FAILED
+e: file:///E:/workspace/flyme/bubbledrawer/app/src/main/java/com/repl/bubbledrawer/bubble/GestureAppLauncher.kt:91:63 Unresolved reference 'factory'.
+e: file:///E:/workspace/flyme/bubbledrawer/app/src/main/java/com/repl/bubbledrawer/pin/LetterIndexBar.kt:43:23 None of the following candidates is applicable:
+static fun argb(p0: Float, p1: Float, p2: Float, p3: Float): Int
+static fun argb(p0: Int, p1: Int, p2: Int, p3: Int): Int
+e: file:///E:/workspace/flyme/bubbledrawer/app/src/main/java/com/repl/bubbledrawer/pin/LetterIndexBar.kt:119:31 Argument type mismatch: actual type is 'Int', but 'Float' was expected.
+e: file:///E:/workspace/flyme/bubbledrawer/app/src/main/java/com/repl/bubbledrawer/pin/LetterIndexBar.kt:121:32 Argument type mismatch: actual type is 'Int', but 'Float' was expected.
+e: file:///E:/workspace/flyme/bubbledrawer/app/src/main/java/com/repl/bubbledrawer/pin/PinManageActivity.kt:163:37 Unresolved reference 'menu_title_manager'.
+e: file:///E:/workspace/flyme/bubbledrawer/app/src/main/java/com/repl/bubbledrawer/pin/PinManageActivity.kt:169:28 Unresolved reference 'action_manager'.
+e: file:///E:/workspace/flyme/bubbledrawer/app/src/main/java/com/repl/bubbledrawer/pin/PinManageActivity.kt:176:14 Unresolved reference 'action_manager'.
+e: file:///E:/workspace/flyme/bubbledrawer/app/src/main/java/com/repl/bubbledrawer/settings/MainActivity.kt:97:18 Unresolved reference 'ID'.
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugKotlin' (registered by plugin 'com.android.internal.application').
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 48s
+6 actionable tasks: 6 executed
