@@ -83,12 +83,13 @@ class OverlayHost(
             z.listener = object : ZoneView.Listener {
                 override fun onTrigger(corner: Corner, ev: MotionEvent) {
                     dock.show(corner, screenW, screenH)
-                    // replay DOWN in screen coords, then this MOVE — like the original
-                    // window's m9740w saw DOWN first (:906-909)
+                    // replay DOWN in screen coords, then this MOVE — the original
+                    // window saw a DOWN first (m9740w :906-909) then MOVEs
                     val down = MotionEvent.obtain(ev)
                     down.action = MotionEvent.ACTION_DOWN
                     dock.forward(down, 0)
                     down.recycle()
+                    dock.forward(ev, 0)
                 }
 
                 override fun onMove(ev: MotionEvent, screenX: Float, screenY: Float) {
@@ -175,12 +176,16 @@ class ZoneView(context: Context, private val zone: CornerZone) : android.view.Vi
             MotionEvent.ACTION_MOVE -> {
                 if (!tracking) return false
                 val feed = detector.onMove(sx, sy)
-                if (feed == CornerGestureDetector.Feed.ACCEPT && !accepted) {
+                val cornerNow = detector.corner
+                if (feed == CornerGestureDetector.Feed.ACCEPT && !accepted && cornerNow != null) {
                     accepted = true
-                    listener?.onTrigger(detector.corner ?: return true, event)
+                    val re = MotionEvent.obtain(event)
+                    re.offsetLocation(loc[0].toFloat(), loc[1].toFloat())
+                    listener?.onTrigger(cornerNow, re)
+                    re.recycle()
                 }
                 if (accepted) {
-                    // rebuild an event in screen coordinates for the launcher
+                    // forward in screen coordinates for the full-screen launcher
                     val re = MotionEvent.obtain(event)
                     re.offsetLocation(loc[0].toFloat(), loc[1].toFloat())
                     listener?.onMove(re, sx, sy)
