@@ -46,6 +46,9 @@ class OverlayHost(
     @SuppressLint("WrongConstant")
     fun attach() {
         detach()
+        // launcher survives across refresh (owned by the controller); detach it from
+        // the stale canvas first or addView would throw "child already has a parent"
+        (dock.launcher.parent as? android.view.ViewGroup)?.removeView(dock.launcher)
         val dm = context.resources.displayMetrics
         screenW = dm.widthPixels
         screenH = dm.heightPixels
