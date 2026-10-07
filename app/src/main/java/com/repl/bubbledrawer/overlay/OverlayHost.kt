@@ -83,14 +83,22 @@ class OverlayHost(
             z.listener = object : ZoneView.Listener {
                 override fun onTrigger(corner: Corner, ev: MotionEvent) {
                     dock.show(corner, screenW, screenH)
+                    // replay DOWN in screen coords, then this MOVE — like the original
+                    // window's m9740w saw DOWN first (:906-909)
+                    val down = MotionEvent.obtain(ev)
+                    down.action = MotionEvent.ACTION_DOWN
+                    dock.forward(down, 0)
+                    down.recycle()
                 }
 
                 override fun onMove(ev: MotionEvent, screenX: Float, screenY: Float) {
-                    if (dock.isBusy) dock.forward(ev, 0)
+                    // always forward once accepted — launcher guards internally
+                    // (centerY==-1 → DOWN path), matching m9740w receiving every event
+                    dock.forward(ev, 0)
                 }
 
                 override fun onEnd(ev: MotionEvent?, cancelled: Boolean) {
-                    if (dock.isBusy) ev?.let { dock.forward(it, 0) }
+                    ev?.let { dock.forward(it, 0) }
                     if (cancelled) dock.forceRetract()
                 }
             }
