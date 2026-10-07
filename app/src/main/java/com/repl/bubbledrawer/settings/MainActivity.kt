@@ -54,10 +54,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun isRunning() = AppGraph.serviceRunning
 
+    private fun userWants() = getSharedPreferences("runtime", MODE_PRIVATE)
+        .getBoolean("user_wants", false)
+
     private fun refreshState() {
         val cb = switchView
         suppressListener = true
-        cb?.isChecked = isRunning()
+        // reflect the persisted user intent (survives service death/reboot), not the process
+        cb?.isChecked = userWants() || isRunning()
         cb?.text = if (Settings.canDrawOverlays(this)) getString(R.string.enable_service)
         else getString(R.string.perm_overlay_missing)
         suppressListener = false
@@ -69,6 +73,9 @@ class MainActivity : AppCompatActivity() {
             refreshState()
             return
         }
+        // persist user intent so BootReceiver re-arms after reboot
+        getSharedPreferences("runtime", MODE_PRIVATE)
+            .edit().putBoolean("user_wants", on).apply()
         if (on) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED

@@ -58,6 +58,7 @@ class LauncherService : android.app.Service() {
         startForeground(1, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         host?.attach()
         AppGraph.serviceRunning = true
+        // user intent flag lives in settings ("user_wants") — BootReceiver reads it
         if (AppGraph.previewRequested) {
             AppGraph.previewRequested = false
             host?.preview(Corner.BOTTOM_LEFT)
