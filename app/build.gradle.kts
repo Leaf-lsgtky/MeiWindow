@@ -57,6 +57,10 @@ dependencies {
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
     // libxposed API 102 — versions pinned to the FlymeFreeform reference (gradle/libs.versions.toml:7-8)
     compileOnly("io.github.libxposed:api:102.0.0")
+    // @hide platform input classes (InputMonitor / InputEventReceiver / InputChannel /
+    // InputManagerGlobal) for the real gesture-monitor transport. compileOnly: the stubs
+    // are never packaged, the boot classpath provides the real classes at runtime.
+    compileOnly(project(":hiddenapi"))
     implementation("io.github.libxposed:service:102.0.0")
     testImplementation("junit:junit:4.13.2")
 }

@@ -66,26 +66,21 @@ class SystemUiHookInstaller(
             }
             inputMonitor = monitor
             monitor.start()
-            module.log(Log.INFO, TAG, "SYSTEMUI_CORNER_SPY_READY")
-            // The REAL steal path inside apps: HyperOS's edge-swipe monitor
-            // (android.view.InputMonitor.pilferPointers, zero args) takes the
-            // stream 6–22 ms after a corner DOWN — before our diagonal
-            // thresholds can claim. The guard SWALLOWS that steal for the
-            // duration of a corner stroke, then arbitrates: claimed → the
-            // drawer owns the stream (and the late native triggerBack is
-            // suppressed); unclaimed → the stream is handed back so native
-            // BACK keeps working for every gesture the drawer did not take.
-            val guard = PilferGuard(
+            module.log(
+                Log.INFO,
+                TAG,
+                "SYSTEMUI_CORNER_READY transport=" +
+                    (if (monitor.monitorActive) "gesture-monitor" else "spy-view-fallback"),
+            )
+            // Only arbitration left after the transport switch: keep the native back
+            // handler's commit out of a corner stroke the drawer claimed for itself.
+            val guard = BackGestureGuard(
                 module,
-                { monitor.isCornerStreamActive() },
                 { monitor.isCornerCommitWindow() },
             ) { priority, message, error ->
                 module.log(priority, TAG, message, error)
             }
             guard.install(appClassLoader ?: context.classLoader)
-            monitor.strokeEndSink = { claimed ->
-                if (claimed) guard.discardHandoff() else guard.handOffToNative()
-            }
         } catch (exception: ReflectiveOperationException) {
             module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_API_UNAVAILABLE", exception)
         } catch (exception: RuntimeException) {

@@ -10,11 +10,21 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - [ ] 通知点击回到主页，开关仍为开
 
 ## A2 角落手势与返回手势共存
-- [ ] 右角斜向上滑 → 气泡扇展开；正上滑（返回）不被劫持
-- [ ] 左角斜向上滑 → 展开方向朝右；系统返回仍正常
+- [ ] **应用内**（浏览器/微信/设置等前台）右角斜向上滑 → 气泡扇展开（此前只在桌面生效）
+- [ ] **应用内**左角斜向上滑 → 展开方向朝右；系统返回仍正常
+- [ ] 正上滑（返回）不被劫持：不出现"既返回又开扇"
 - [ ] 若被系统手势抢走：扇静默收起，无残留（ACTION_CANCEL 路径）
 - [ ] 设置页三滑杆（内缩/宽/高）调整后重启服务，起手势区域随之变化
 - [ ] 触发位=侧边中部：左右边缘中段横滑出扇
+
+### A2 日志判据（LSPosed 模块日志，tag `BubbleDrawer`）
+- [ ] 启动即 `PREFS_APPLIED … transport=gesture-monitor`（写 `spy-view` 说明监视器没建起来，
+      日志里 `MON_INPUT_UNAVAILABLE_FALLBACK_SPY_VIEW` 带原因）
+- [ ] 一次成功手势：`MON_DOWN side=… x=… y=…` → `MON_PILFER_OK=true` → `MON_ACTIVATE …`
+- [ ] 应用内**不再**出现 `MON_DOWN` 紧跟 `MON_SYSTEM_CANCEL`（旧症状：
+      `SPY_*_DOWN` +6~22ms `SPY_*_SYSTEM_CANCEL`）
+- [ ] `dumpsys input` 的 `Gesture Monitors (implemented as spy windows)` 里有
+      `[Gesture Monitor] BubbleDrawer-corner`
 
 ## A3 展开动效（对照 Flyme 录屏逐帧）
 - [ ] 展开：整扇从角落飞出、-270°旋入带过冲（-7.6 控制点回弹），130ms 主体 + 130ms 延迟的 250ms 收尾
