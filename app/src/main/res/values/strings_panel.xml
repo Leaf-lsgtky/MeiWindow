@@ -5,6 +5,8 @@
     <string name="panel_height">面板高度</string>
     <string name="panel_icon">图标大小</string>
     <string name="panel_text">文字大小</string>
-    <string name="panel_pct_default">默认 62%</string>
     <string name="panel_default">默认</string>
+    <string name="panel_dismiss_outside">点击外部收起</string>
+    <string name="panel_dismiss_outside_single">单击</string>
+    <string name="panel_dismiss_outside_double">双击</string>
 </resources>

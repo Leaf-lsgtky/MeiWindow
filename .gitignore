@@ -5,3 +5,7 @@ local.properties
 *.iml
 .idea/
 .DS_Store
+*.jks
+*.keystore
+*.apk
+release.jks

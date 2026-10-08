@@ -18,6 +18,7 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import com.repl.bubbledrawer.R
@@ -34,7 +35,8 @@ import com.repl.bubbledrawer.gesture.SpySide
 import com.repl.bubbledrawer.launch.FreeformLaunchStrategy
 import com.repl.bubbledrawer.launch.FullscreenLaunchStrategy
 import com.repl.bubbledrawer.launch.ILaunchStrategy
-import com.repl.bubbledrawer.pin.PinManageView
+import com.repl.bubbledrawer.pin.PanelContentFactory
+import com.repl.bubbledrawer.pin.PinManageModel
 import de.hdodenhof.circleimageview.CircleImageView
 import kotlinx.coroutines.launch
 
@@ -69,10 +71,53 @@ class FanHost(
     private val context: Context = moduleContext?.let { ModuleResources.FanContext(host, it) } ?: host
 
     private val repo = AppRepository(context)
+
+    /**
+     * Pin persistence inside SystemUI (方案 B panel writes).
+     *
+     * `prefs` (the module's `XposedInterface.getRemotePreferences` view) is a READ-ONLY
+     * mirror — its `edit()` throws `UnsupportedOperationException: Read only
+     * implementation` (verified on device; libxposed 102 semantics: hook-process writes
+     * do not exist on that object, and `XposedServiceHelper` does not deliver to
+     * hook processes either — only to the module's own app process).
+     *
+     * So the write path is a round-trip to the module APP process:
+     * [PinSyncService] (exported, guarded by a caller-uid check) applies the encoded
+     * order through the ordinary app-side backend (local mirror + LSPosed remote group),
+     * which is exactly what the manage Activity writes. SystemUI runs as system (uid
+     * 1000), so `startService` from here is allowed to reach the module app even when it
+     * is not running. Until the round-trip lands, the in-memory overlay below keeps the
+     * FAN consistent within this SystemUI lifetime (the original ItemTouchHelper also
+     * only re-read on next show).
+     */
+    @Volatile
+    private var pinsOverlay: String? = null
+
     private val pinStore = PinStore(object : PinBackend {
-        override fun read(): String = prefs.getString(PrefsPinBackend.KEY, "").orEmpty()
-        override fun write(value: String) { prefs.edit().putString(PrefsPinBackend.KEY, value).apply() }
+        override fun read(): String =
+            pinsOverlay ?: prefs.getString(PrefsPinBackend.KEY, "").orEmpty()
+
+        override fun write(value: String) {
+            pinsOverlay = value
+            val delivered = runCatching {
+                val intent = android.content.Intent(PinSyncService.ACTION)
+                    .setPackage(context.packageName.takeIf { it.startsWith("com.repl.bubbledrawer") }
+                        ?: "com.repl.bubbledrawer")
+                    .putExtra(PinSyncService.EXTRA_PINS, value)
+                // SystemUI identity (FanContext keeps the SystemUI package), so this is a
+                // system-uid startService: allowed to target an exported component of any
+                // app, running or not.
+                context.startService(intent)
+                true
+            }.getOrDefault(false)
+            logger(
+                if (delivered) Log.INFO else Log.WARN,
+                "PIN_WRITE_HANDOFF delivered=$delivered valueLen=${value.length}",
+                null,
+            )
+        }
     })
+
     private val strategy = ILaunchStrategy { ctx, app ->
         // freeform toggle from the same prefs the monitor watches (remote group)
         val snap = RemotePrefs.read(prefs)
@@ -103,10 +148,21 @@ class FanHost(
         dock.onShownChanged = { shown -> if (!shown) fadeOutFanWindows() }
         // 更多 tile → overlay panel instead of the full-screen Activity (方案 B)
         dock.onMoreRequested = { showMorePanel() }
-        scope.launch { runCatching { repo.loadAll() } } // warm the list for the first swipe
+        scope.launch {
+            runCatching { repo.loadAll() }
+            mainHandler.post {
+                if (dock.isBusy) {
+                    val snap = RemotePrefs.read(prefs)
+                    dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp)
+                }
+            }
+        }
         // pins edits while the fan is open → live rebind (reference :85-96 watch pattern)
         pinsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == PrefsPinBackend.KEY) mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH()) }
+            if (key == PrefsPinBackend.KEY || key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP) {
+                val snap = RemotePrefs.read(prefs)
+                mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp) }
+            }
         }
         runCatching { prefs.registerOnSharedPreferenceChangeListener(pinsListener) }
         // SCREEN_OFF → retract (original mo864f :1049-1056 → m9254Z)
@@ -144,7 +200,8 @@ class FanHost(
         activeCorner = if (side == SpySide.LEFT) Corner.BOTTOM_LEFT else Corner.BOTTOM_RIGHT
         raiseFanWindows()
         dock.previewMode = false
-        dock.show(activeCorner, screenW, screenH)
+        val snap = RemotePrefs.read(prefs)
+        dock.show(activeCorner, screenW, screenH, snap.fanIconCount, snap.fanRadiusDp)
         val t = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, downX, downY, 0)
         dock.forward(down, 0)
@@ -170,8 +227,8 @@ class FanHost(
     }
 
     private fun armTimeout() {
+        // Disabled: 用户要求“扇形面板弹出后不要过几秒就消失”，仅在点按外部、选中应用或熄屏时收起
         mainHandler.removeCallbacks(timeout)
-        mainHandler.postDelayed(timeout, GESTURE_TIMEOUT_MS)
     }
 
     // ---------------- tile building ----------------
@@ -275,7 +332,7 @@ class FanHost(
 
     private var moreCatcher: View? = null
     private var morePanel: FrameLayout? = null
-    private var moreContent: PinManageView? = null
+    private var moreContent: PinManageModel? = null
     private var moreUp = false
     private var moreRect: Rect? = null
 
@@ -302,9 +359,24 @@ class FanHost(
         val rect = applyPanelSize(defaultPanelRect(), panelSnap)
         moreRect = Rect(rect)
 
+        val dismissMode = panelSnap.panelDismissOutside
+        val doubleTapTimeout = ViewConfiguration.getDoubleTapTimeout().toLong()
+        var lastCatcherTapTime = 0L
         val catcher = object : FrameLayout(context) {
             override fun onTouchEvent(event: MotionEvent): Boolean {
-                if (event.actionMasked == MotionEvent.ACTION_DOWN) hideMorePanel()
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    if (dismissMode == RemotePrefs.DISMISS_OUTSIDE_SINGLE) {
+                        hideMorePanel()
+                    } else {
+                        val now = SystemClock.uptimeMillis()
+                        if (now - lastCatcherTapTime <= doubleTapTimeout) {
+                            hideMorePanel()
+                            lastCatcherTapTime = 0L
+                        } else {
+                            lastCatcherTapTime = now
+                        }
+                    }
+                }
                 return true
             }
         }.apply {
@@ -321,22 +393,20 @@ class FanHost(
         moreCatcher = catcher
 
         // The panel hosts the SAME page the fan's 更多 tile always opened: the manage
-        // page. Flyme does exactly this — the tile starts SlideLaunchAppSettings and the
-        // framework lands it inside the current window instead of a new full-screen page.
-        // Theme: the page's AppBar/TabLayout need a Material theme; FanContext carries
-        // SystemUI's, so wrap it in ours (resources still resolve to the module).
+        // page (方案 B). With the miuix Compose refactor the page IS the Activity's page —
+        // PinManageScreen(chrome = PANEL) draws the 56dp look-alike bar itself. The theme
+        // wrapper is still needed: it pins the window's DayNight resource resolution for
+        // the View islands (LetterIndexBar) inside the Compose tree.
         val themed = ContextThemeWrapper(context, R.style.Theme_BubbleDrawer)
-        val content = PinManageView(
-            context = themed,
-            repo = repo,
-            pinStore = pinStore,
-            onLaunch = { app -> launchFromPanel(app) },
-            // overlay → the page draws the ActionBar look-alike (title + 管理/完成 + ✕)
-            chrome = PinManageView.Chrome.PANEL,
-            iconDp = panelSnap.panelIconDp,
-            textSp = panelSnap.panelTextSp,
-            onClose = { hideMorePanel() },
+        val content = PinManageModel(
+            loadApps = { repo.cachedAll().ifEmpty { repo.loadAll() } },
+            pinsOf = { pinStore.pins() },
+            onOrderChange = { order -> pinStore.setPins(order) },
         )
+        // Panel window root FIRST, then the Compose content inside it: the view-tree
+        // owners must be tagged on the window root too (see PanelContentFactory.create
+        // doc) because compose resolves the lifecycle owner at the compose-view ROOT,
+        // not on the ComposeView itself.
         val panel = FrameLayout(context).apply {
             background = GradientDrawable().apply {
                 // MiuiMultiWindowUtils.FREEFORM_ROUND_CORNER = 25.8dp — match the ROM window
@@ -344,15 +414,24 @@ class FanHost(
                 setColor(themed.resources.getColor(R.color.fd_sys_color_surface_bright_default, null))
             }
             clipToOutline = true
-            addView(
-                content.view,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                ),
-            )
             alpha = 0f
         }
+        val composeView = PanelContentFactory.create(
+            windowRoot = panel,
+            context = themed,
+            model = content,
+            iconDp = panelSnap.panelIconDp,
+            textSp = panelSnap.panelTextSp,
+            onLaunch = { app -> launchFromPanel(app) },
+            onClose = { hideMorePanel() },
+        )
+        panel.addView(
+            composeView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
         val panelAdded = runCatching { wm.addView(panel, panelParams("bubble more panel", rect)) }
         if (panelAdded.isFailure) {
             logger(Log.WARN, "MORE_PANEL_FAILED", panelAdded.exceptionOrNull())
@@ -369,12 +448,20 @@ class FanHost(
             "MORE_PANEL_SHOW " + rect.toShortString() + " screen=" + screenW() + "x" + screenH() +
                 " pct=" + panelSnap.panelWidthPct + "x" + panelSnap.panelHeightPct +
                 " icon=" + panelSnap.panelIconDp + " text=" + panelSnap.panelTextSp +
-                " page=" + content.describe(),
+                " page=" + content.describe(
+                    themed.resources.getString(R.string.slide_launcher_tab_all_app),
+                    themed.resources.getString(R.string.slide_launch_app_has_selected),
+                ),
         )
         // Ground truth for "which page is in the panel?" — one line per open, no screenshot
         // and no 700 ms race (a fresh stroke may silently take the panel down before that).
         panel.post {
-            panelLog("MORE_PANEL_TREE " + (moreContent?.describe() ?: "closed-before-layout"))
+            panelLog(
+                "MORE_PANEL_TREE " + (moreContent?.describe(
+                    themed.resources.getString(R.string.slide_launcher_tab_all_app),
+                    themed.resources.getString(R.string.slide_launch_app_has_selected),
+                ) ?: "closed-before-layout"),
+            )
         }
     }
 
@@ -434,14 +521,14 @@ class FanHost(
     }
 
     /**
-     * 基准矩形：屏幕正中的 [DEFAULT_PANEL_PCT] 占地 —— 与启动小窗的默认尺寸一致，
+     * 基准矩形：屏幕正中默认占地 —— 与启动小窗的默认尺寸一致，
      * 所以从面板里点应用时，应用正好落在面板原来的位置。
      */
     private fun defaultPanelRect(): Rect {
         val w = screenW()
         val h = screenH()
-        val pw = (w * DEFAULT_PANEL_PCT / 100f).toInt()
-        val ph = (h * DEFAULT_PANEL_PCT / 100f).toInt()
+        val pw = (w * RemotePrefs.DEFAULT_PANEL_W_PCT / 100f).toInt()
+        val ph = (h * RemotePrefs.DEFAULT_PANEL_H_PCT / 100f).toInt()
         return Rect((w - pw) / 2, (h - ph) / 2, (w + pw) / 2, (h + ph) / 2)
     }
 

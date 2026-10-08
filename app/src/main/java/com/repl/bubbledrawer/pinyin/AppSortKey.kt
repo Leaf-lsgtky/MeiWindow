@@ -14,6 +14,7 @@ import java.util.Locale
  */
 
 /** One selectable launcher entry (superset of original `LauncherAppPersistent`, C2762j.java:407-432). */
+@androidx.compose.runtime.Immutable
 data class BubbleApp(
     val packageName: String,
     val label: String,
@@ -30,12 +31,12 @@ object AppSortKey {
     /** `AbstractC7096c.m25056u()` (:282-284): recompute key from label. */
     fun of(label: String): String = HanziToPinyin.sortKey(label)
 
-    /** Section letter for a sort key: uppercase first char; digits bucket "0"; rest "#". */
+    /** Section letter for a sort key: uppercase first char; digits AND symbols bucket "#" (the
+     * index bar's tail glyph — the old "0" bucket is folded in per UI refactor). */
     fun groupOf(sortKey: String): String {
         val c = sortKey.firstOrNull() ?: return "#"
         return when {
             c in 'A'..'Z' || c in 'a'..'z' -> c.uppercaseChar().toString()
-            c in '0'..'9' -> "0"
             else -> "#"
         }
     }

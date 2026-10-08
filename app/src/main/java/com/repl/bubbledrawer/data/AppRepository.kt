@@ -6,6 +6,8 @@ import android.graphics.drawable.Drawable
 import android.util.LruCache
 import com.repl.bubbledrawer.pinyin.AppSortKey
 import com.repl.bubbledrawer.pinyin.BubbleApp
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -13,17 +15,37 @@ import kotlinx.coroutines.withContext
  * Enumerates launchable apps and caches icons.
  * Original: `C2762j.m8870J()` merges config pins + usage list via a Binder query to
  * its own provider; ours uses PackageManager directly (works on any ROM).
+ *
+ * Returns an [ImmutableList] from the PRODUCER (docs/ui-guidelines.md "强跳过友好的状态
+ * 形状") — every composable downstream stays skippable without a UI-layer conversion.
  */
 class AppRepository(private val context: Context) {
 
     private val iconCache = LruCache<String, Drawable>(64)
 
-    private var cache: List<BubbleApp> = emptyList()
+    @Volatile
+    private var cache: ImmutableList<BubbleApp> = kotlinx.collections.immutable.persistentListOf()
 
     /** Synchronous view of the last [loadAll] (bubble bar reads this on expand). */
-    fun cachedAll(): List<BubbleApp> = cache
+    fun cachedAll(): ImmutableList<BubbleApp> = cache
 
-    suspend fun loadAll(): List<BubbleApp> = withContext(Dispatchers.IO) {
+    /** Synchronous lookup for a single app; resolves from PackageManager if cache is cold. */
+    fun findApp(packageName: String, userId: Int = 0): BubbleApp? {
+        cache.firstOrNull { it.packageName == packageName && it.userId == userId }?.let { return it }
+        return runCatching {
+            val pm = context.packageManager
+            val ai = pm.getApplicationInfo(packageName, 0)
+            val label = pm.getApplicationLabel(ai).toString()
+            BubbleApp(
+                packageName = packageName,
+                label = label,
+                userId = userId,
+                usageCount = LaunchCountStore.get(context, packageName),
+            )
+        }.getOrNull()
+    }
+
+    suspend fun loadAll(): ImmutableList<BubbleApp> = withContext(Dispatchers.IO) {
         val pm = context.packageManager
         val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val own = context.packageName
@@ -41,7 +63,8 @@ class AppRepository(private val context: Context) {
                 )
             }
             .toList()
-        list.sortedWith(AppSortKey.DEFAULT).also { cache = it }
+            .toImmutableList()
+        list.sortedWith(AppSortKey.DEFAULT).toImmutableList().also { cache = it }
     }
 
     fun icon(app: BubbleApp): Drawable? {

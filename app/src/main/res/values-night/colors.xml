@@ -1,12 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- values verbatim from decompiled values-night/colors.xml (spec §6.5 tokens) -->
-    <color name="fd_sys_color_on_surface_default">#eeeeee</color>
-    <color name="fd_sys_color_on_surface_variant_default">#73ebebf5</color>
-    <color name="fd_sys_color_outline_variant_default">#0dffffff</color>
     <color name="fd_sys_color_surface_bright_default">#17171a</color>
     <color name="fd_sys_color_surface_container_highest_default">#6679797e</color>
-    <color name="fd_sys_color_scrim_default">#73000000</color>
-    <color name="app_item_title_color">#ffeeeeee</color>
-    <color name="app_item_title_more_app_color">#ffeeeeee</color>
 </resources>

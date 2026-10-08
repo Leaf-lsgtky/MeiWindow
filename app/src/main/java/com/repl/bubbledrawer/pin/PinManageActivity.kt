@@ -1,86 +1,118 @@
 package com.repl.bubbledrawer.pin
 
 import android.os.Bundle
-import android.view.Menu
-import android.view.MenuItem
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.repl.bubbledrawer.AppGraph
 import com.repl.bubbledrawer.R
 import com.repl.bubbledrawer.data.AppRepository
+import com.repl.bubbledrawer.data.LaunchCountStore
 import com.repl.bubbledrawer.data.PinStore
 import com.repl.bubbledrawer.launch.ConfigurableLaunchStrategy
+import com.repl.bubbledrawer.ui.theme.BubbleDrawerTheme
+import com.repl.bubbledrawer.ui.util.BlurredBar
+import com.repl.bubbledrawer.ui.util.barColor
+import com.repl.bubbledrawer.ui.util.rememberBlurBackdrop
+import com.repl.bubbledrawer.xposed.SettingsStore
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.ListView
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * Port of `SlideLaunchAppSettings.java` — the 应用 tab slice (功能 tab phase 2):
- *  - title "选择快捷启动的应用" (:74-77 string title, the ActionBar title)
- *  - tab strip 应用 (slide_launcher_tab_all_app, minHeight 54dp :802-805)
- *  - single 4-col grid: ★(≤6, drag-sort) → 推荐 → A..Z → # (Sections)
- *  - manage-mode toggle via the ActionBar item 管理/完成 (action_app_manager/_complate)
- *  - LetterIndexBar (★/A–Z/#) scrolls to labels; scroll syncs currentLetter (:326)
- *
- * Thin host: the page body lives in [PinManageView] so the SAME page also serves the
- * fan's 更多 overlay inside SystemUI (方案 B). Here the page is hosted with
- * [PinManageView.Chrome.ACTIVITY] — no header of its own; the ActionBar keeps the
- * original title + 管理/完成 menu (the overlay draws a look-alike bar itself).
+ * Port of `SlideLaunchAppSettings` — the 应用 tab slice, now a Compose host
+ * ([PinManageScreen] with [Chrome.ACTIVITY]). The 管理/完成 toggle moved from the
+ * options menu into the TopAppBar actions (menu_title_manager.xml is gone); back is
+ * MiuixIcons.Back per docs/ui-guidelines.md.
  */
-class PinManageActivity : AppCompatActivity() {
-
-    private lateinit var content: PinManageView
+class PinManageActivity : ComponentActivity() {
 
     private val repo by lazy { AppGraph.repo ?: AppRepository(this).also { AppGraph.repo = it } }
     private val pinStore by lazy {
         AppGraph.pinStore ?: PinStore(
-            com.repl.bubbledrawer.xposed.SettingsStore.pinBackend(this),
+            SettingsStore.pinBackend(this),
         ).also { AppGraph.pinStore = it }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        content = PinManageView(
-            context = this,
-            repo = repo,
-            pinStore = pinStore,
-            onLaunch = { app ->
-                // ORIGINAL: view-mode tap launches the app (AbstractC2806s.m9105e carries
-                // start_windowmode=true, so flyme floats it over the still-visible page)
-                ConfigurableLaunchStrategy(this).launch(this, app)
-                com.repl.bubbledrawer.data.LaunchCountStore.increment(this, app.packageName)
-            },
-            chrome = PinManageView.Chrome.ACTIVITY,
-            onManageModeChanged = { invalidateOptionsMenu() },
+        enableEdgeToEdge()
+        val model = PinManageModel(
+            loadApps = { repo.cachedAll().ifEmpty { repo.loadAll() } },
+            pinsOf = { pinStore.pins() },
+            onOrderChange = { order -> pinStore.setPins(order) },
         )
-        setContentView(content.view)
-        content.reload()
-    }
-
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.menu_title_manager, menu)
-        updateMenuTitle(menu)
-        return true
-    }
-
-    private fun updateMenuTitle(menu: Menu) {
-        menu.findItem(R.id.action_manager)?.setTitle(content.managerLabel())
-    }
-
-    override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
-        android.R.id.home -> {
-            finish(); true
+        model.reload()
+        setContent {
+            BubbleDrawerTheme {
+                val scrollBehavior = MiuixScrollBehavior()
+                val backdrop = rememberBlurBackdrop()
+                val manageLabel = stringResourceFor(model)
+                Scaffold(
+                    topBar = {
+                        BlurredBar(backdrop = backdrop, scrollBehavior = scrollBehavior) {
+                            SmallTopAppBar(
+                                title = getString(R.string.slide_launch_app_settings_title),
+                                color = barColor(backdrop != null),
+                                scrollBehavior = scrollBehavior,
+                                navigationIcon = {
+                                    IconButton(onClick = { finish() }) {
+                                        Icon(
+                                            imageVector = MiuixIcons.Back,
+                                            contentDescription = getString(R.string.back),
+                                        )
+                                    }
+                                },
+                                actions = {
+                                    IconButton(
+                                        onClick = model::toggleManageMode,
+                                    ) {
+                                        Icon(
+                                            imageVector = MiuixIcons.ListView,
+                                            contentDescription = manageLabel,
+                                            tint = if (model.manageMode) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                    },
+                ) { innerPadding ->
+                    PinManageScreen(
+                        model = model,
+                        chrome = Chrome.ACTIVITY,
+                        iconDp = 0,
+                        textSp = 0,
+                        onLaunch = { app ->
+                            // ORIGINAL: view-mode tap launches the app (AbstractC2806s.m9105e
+                            // carries start_windowmode=true)
+                            ConfigurableLaunchStrategy(this@PinManageActivity).launch(this@PinManageActivity, app)
+                            LaunchCountStore.increment(this@PinManageActivity, app.packageName)
+                        },
+                        onClose = null,
+                        onToggleManage = model::toggleManageMode,
+                        manageLabel = manageLabel,
+                        topPadding = innerPadding,
+                        backdrop = backdrop,
+                        scrollBehavior = scrollBehavior,
+                    )
+                }
+            }
         }
-        R.id.action_manager -> {
-            content.toggleManageMode()
-            true
-        }
-        else -> super.onOptionsItemSelected(item)
     }
 
-    override fun onResume() {
-        super.onResume()
-        content.reload() // list may have changed
-    }
-
-    override fun onDestroy() {
-        content.release()
-        super.onDestroy()
-    }
+    @androidx.compose.runtime.Composable
+    private fun stringResourceFor(model: PinManageModel): String =
+        androidx.compose.ui.res.stringResource(
+            if (model.manageMode) R.string.action_app_manager_complate else R.string.action_app_manager,
+        )
 }

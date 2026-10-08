@@ -30,6 +30,20 @@
         <activity
             android:name=".pin.PinManageActivity"
             android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar"
             android:label="@string/slide_launch_app_settings_title" />
+
+        <!-- Pin persistence handoff from the SystemUI overlay panel: the hook process
+             cannot write the LSPosed remote group (read-only mirror there), so FanHost
+             startService()'s the encoded order here and the app-side backend writes it
+             (local mirror + remote group). Exported because SystemUI is another app; the
+             service itself rejects any caller except android (uid 1000). -->
+        <service
+            android:name=".xposed.PinSyncService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.repl.bubbledrawer.action.SYNC_PINS" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

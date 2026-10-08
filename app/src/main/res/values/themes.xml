@@ -1,16 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- original AppTheme: Light + windowBackground=?colorSurfaceBright + forceDarkAllowed
-         (night = framework recolor). We use a real DayNight theme + fd_sys_* tokens
-         (day #ffffff / night #17171a from decompiled values) — equivalent result. -->
-    <style name="Theme.BubbleDrawer" parent="Theme.Material3.DayNight">
+    <!-- Compose host theme. The pages are miuix Compose now, so no Material3/AppCompat
+         parent is needed (those deps are gone); DeviceDefault.DayNight keeps correct
+         day/night resource resolution for the surviving View island (the fan, still
+         drawing with fd_sys_* tokens inside SystemUI). Bars are transparent because both
+         Activities go edge-to-edge via enableEdgeToEdge(). -->
+    <style name="Theme.BubbleDrawer" parent="@android:style/Theme.DeviceDefault.DayNight">
         <item name="android:windowBackground">@color/fd_sys_color_surface_bright_default</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
     </style>
 
-    <style name="Theme.BubbleDrawer.NoActionBar">
-        <item name="windowActionBar">false</item>
-        <item name="windowNoTitle">true</item>
-    </style>
+    <style name="Theme.BubbleDrawer.NoActionBar" parent="Theme.BubbleDrawer" />
 </resources>

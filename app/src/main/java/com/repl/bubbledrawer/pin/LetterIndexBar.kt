@@ -65,6 +65,16 @@ class LetterIndexBar @JvmOverloads constructor(
         get() = bar.currentLetter
         set(v) { bar.currentLetter = v }
 
+    /** Vertical CENTERING of the letter column (panel host passes true). */
+    var centerVertically: Boolean
+        get() = bar.centerVertically
+        set(v) { bar.centerVertically = v; bar.invalidate() }
+
+    /** Sampled display for short hosts (see [BarColumn.allowSampledDisplay]). */
+    var allowSampledDisplay: Boolean
+        get() = bar.allowSampledDisplay
+        set(v) { bar.allowSampledDisplay = v; bar.requestLayout(); bar.invalidate() }
+
     init {
         bar.id = 10086 // the id the original assigns (C4423b :334)
         addView(bar, RelativeLayout.LayoutParams(
@@ -95,6 +105,15 @@ class LetterIndexBar @JvmOverloads constructor(
     /** Re-resolve resource colors (DayNight) — invoked from BarColumn.onConfigurationChanged. */
     fun refreshColors() = bar.refreshColors()
 
+    /**
+     * Theme-injected colors (Compose host): the island follows the miuix scheme instead of
+     * the resource tokens when the caller passes explicit values. `null` keeps the
+     * resource default so the View still works standalone.
+     */
+    fun refreshColors(normal: Int?, currentText: Int?, selectedBg: Int?) {
+        bar.refreshColors(normal, currentText, selectedBg)
+    }
+
     private fun ctxColor(id: Int) = androidx.core.content.ContextCompat.getColor(context, id)
 
     private inner class BarColumn(context: Context) : View(context) {
@@ -121,8 +140,15 @@ class LetterIndexBar @JvmOverloads constructor(
         /** f15566U/f15587u = fd_sys_color_surface_container_highest_default (day/night) */
         fun refreshColors() {
             val token = ctxColor(R.color.fd_sys_color_surface_container_highest_default)
+            refreshColors(normal = token, currentText = null, selectedBg = token)
+        }
+
+        /** Overload for a theme-injecting host (see outer [LetterIndexBar.refreshColors]). */
+        fun refreshColors(normal: Int?, currentText: Int?, selectedBg: Int?) {
+            val token = normal ?: ctxColor(R.color.fd_sys_color_surface_container_highest_default)
             normalPaint.color = token
-            bgPaint.color = token
+            bgPaint.color = selectedBg ?: token
+            currentPaint.color = currentText ?: -1 // f15586t = white literal in the original
             val bubbleBg = bubble.background as? ShapeDrawable
             bubbleBg?.paint?.color = ctxColor(R.color.mc_fast_scroll_letter_color_default)
             bubble.setTextColor(ctxColor(R.color.mc_fastscroll_letter_overlay_text_color))
@@ -140,6 +166,16 @@ class LetterIndexBar @JvmOverloads constructor(
             set(v) { field = v; invalidate() }
         var onLetterSelected: ((String) -> Unit)? = null
 
+        /** Vertical CENTERING (panel bar): draw the column around the view centre. */
+        var centerVertically: Boolean = false
+
+        /**
+         * Sampled display for short hosts: when the full column doesn't fit, draw every
+         * Nth glyph (A C E …) but keep touch mapped 1:1 onto the FULL list — the meizu
+         * original shrank the pitch instead; sampled rows read better on a small panel.
+         */
+        var allowSampledDisplay: Boolean = false
+
         private val barW = 28f * density
         private val padRight = 4f * density
         private val vSpace = 4f * density
@@ -149,22 +185,51 @@ class LetterIndexBar @JvmOverloads constructor(
             setMeasuredDimension((barW + padRight).toInt(), MeasureSpec.getSize(heightMeasureSpec))
         }
 
-        /** pitch = textPx + 4dp (C4424c :539-542 rect height = textSize + space),
-         *  shrunk to fit when the screen is short (:226 logic). */
-        private fun pitch(): Float {
+        /** Full-list pitch = textPx + 4dp (C4424c :539-542), shrunk to fit when short. */
+        private fun fullPitch(): Float {
             val natural = textPx + vSpace
             val usable = height.toFloat()
             val total = letters.size * natural
             return if (usable > 0 && total > usable) usable / letters.size else natural
         }
 
+        /**
+         * Row stride actually drawn. `1` = every letter; N>1 = every Nth glyph drawn
+         * (sampled mode), only while [allowSampledDisplay] is on. Touch always divides by
+         * [fullPitch] so dragging over drawn rows still selects hidden letters.
+         */
+        private fun drawStride(): Int {
+            if (!allowSampledDisplay) return 1
+            val natural = textPx + vSpace
+            val total = letters.size * natural
+            if (height <= 0 || total <= height) return 1
+            var stride = 2
+            while (stride < letters.size &&
+                (letters.size / stride + 1) * natural > height) {
+                stride++
+            }
+            return stride
+        }
+
+        /** Top y of the drawn column (centred when [centerVertically]). */
+        private fun topOffset(p: Float, stride: Int): Float {
+            if (!centerVertically) return 0f
+            val rows = if (stride >= letters.size) letters.size else letters.size / stride + 1
+            val drawn = rows * p
+            return ((height - drawn) / 2f).coerceAtLeast(0f)
+        }
+
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val p = pitch()
+            val p = fullPitch()
+            val stride = drawStride()
+            val top = topOffset(p, stride)
             val cx = barW + padRight - selR          // :384 x = width − padRight − r
             val textX = cx                            // letters share the circle centre line
-            letters.forEachIndexed { i, l ->
-                val cy = p * (i + 0.5f)
+            var i = 0
+            while (i < letters.size) {
+                val l = letters[i]
+                val cy = top + p * (i + 0.5f)
                 val isCurrent = l == currentLetter
                 if (isCurrent) {
                     canvas.drawCircle(cx, cy, selR, bgPaint)
@@ -172,14 +237,21 @@ class LetterIndexBar @JvmOverloads constructor(
                 val paint = if (isCurrent) currentPaint else normalPaint
                 val fm = paint.fontMetrics
                 canvas.drawText(l, textX, cy - (fm.ascent + fm.descent) / 2f, paint)
+                i += stride
             }
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            val p = pitch()
+            val p = fullPitch()
+            val stride = drawStride()
+            val top = topOffset(p, stride)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                    val idx = (event.y / p).toInt().coerceIn(0, letters.size - 1)
+                    // Touch maps onto the FULL list regardless of sampling: y → row under
+                    // the finger (anchored to the drawn column), then expand to the real
+                    // letter index (row * stride, clamped).
+                    val row = ((event.y - top) / p).toInt().coerceIn(0, letters.size - 1)
+                    val idx = if (stride <= 1) row else (row * stride).coerceIn(0, letters.size - 1)
                     val l = letters[idx]
                     if (l != currentLetter) {
                         currentLetter = l

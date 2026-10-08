@@ -110,21 +110,25 @@ class BubbleDockController(
     }
 
     /** @param screenH full-screen height in px (the launcher window is MATCH_PARENT). */
-    fun show(corner: Corner, screenW: Int, screenH: Int) {
+    fun show(corner: Corner, screenW: Int, screenH: Int, maxApps: Int = 6, radiusDp: Int = 0) {
         val side = if (corner == Corner.BOTTOM_RIGHT || corner == Corner.SIDE_RIGHT) 1 else 0
         launcher.setAdapter(
-            GestureAppLauncher.SlideAdapter(buildItems()) { item, index ->
+            GestureAppLauncher.SlideAdapter(buildItems(maxApps)) { item, index ->
                 viewFactory?.create(item, index) ?: itemView(item)
             },
         )
         launcher.setLayoutSide(side)
         val navbar = hasNavBar()
-        launcher.setRadiusPx(
-            context.resources.getDimension(
-                if (navbar) R.dimen.slide_gesture_launcher_item_radius
-                else R.dimen.slide_gesture_launcher_item_radius_no_nav_bar,
-            ),
+        val defaultRadius = context.resources.getDimension(
+            if (navbar) R.dimen.slide_gesture_launcher_item_radius
+            else R.dimen.slide_gesture_launcher_item_radius_no_nav_bar,
         )
+        val radiusPx = if (radiusDp > 0) {
+            radiusDp * context.resources.displayMetrics.density
+        } else {
+            defaultRadius
+        }
+        launcher.setRadiusPx(radiusPx)
         launcher.setSafeDegrees(if (navbar) 0 else 3)
         launcher.setCenterPosition(screenH.toFloat())
     }
@@ -140,14 +144,17 @@ class BubbleDockController(
         return id > 0 && context.resources.getDimensionPixelSize(id) > 0
     }
 
-    /** m9235C (:447-463): first 6 pins, then the "更多" tile. */
-    private fun buildItems(): List<GestureAppLauncher.AdapterItem> {
+    /** m9235C (:447-463): first maxApps pins (5 or 6), then the "更多" tile. */
+    private fun buildItems(maxApps: Int): List<GestureAppLauncher.AdapterItem> {
         val all = repo.cachedAll()
         val out = ArrayList<GestureAppLauncher.AdapterItem>()
         for (ref in pinStore.pins()) {
-            if (out.size >= 6) break // :453 i6>=6 break
-            all.firstOrNull { it.packageName == ref.packageName && it.userId == ref.userId }
-                ?.let { out.add(GestureAppLauncher.AdapterItem.AppItem(it)) }
+            if (out.size >= maxApps) break // user selected 5 or 6
+            val app = all.firstOrNull { it.packageName == ref.packageName && it.userId == ref.userId }
+                ?: repo.findApp(ref.packageName, ref.userId)
+            if (app != null) {
+                out.add(GestureAppLauncher.AdapterItem.AppItem(app))
+            }
         }
         out.add(GestureAppLauncher.AdapterItem.More) // :460-461 more tile (icon_gesture_more_app)
         return out

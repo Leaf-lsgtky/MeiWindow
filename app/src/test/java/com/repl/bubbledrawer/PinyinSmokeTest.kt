@@ -59,7 +59,9 @@ class PinyinSmokeTest {
     @Test
     fun groups() {
         assertEquals("W", AppSortKey.groupOf(key("微信")))
-        assertEquals("0", AppSortKey.groupOf("360清理"))
+        // Digits fold into "#" since the miuix UI refactor: the index bar's tail glyph is
+        // the single "#", matching the launcher idiom (the old View page had a "0" bucket).
+        assertEquals("#", AppSortKey.groupOf("360清理"))
         assertEquals("#", AppSortKey.groupOf("★特殊"))
     }
 

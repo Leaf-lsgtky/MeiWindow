@@ -38,6 +38,30 @@ object RemoteBridge {
     /** true once the remote group is connected (settings page shows the state). */
     val connected: Boolean get() = remote != null
 
+    /**
+     * Connection listeners, notified on the worker thread at every bind/die transition.
+     * The Compose settings page feeds its snapshot flow from these (guidelines: screens
+     * consume Flows, never poll `connected` in recomposition).
+     */
+    private val connectionListeners = java.util.concurrent.CopyOnWriteArrayList<(Boolean) -> Unit>()
+
+    fun addConnectionListener(listener: (Boolean) -> Unit) {
+        connectionListeners += listener
+        // Deliver the CURRENT state immediately: a page collecting the flow must not wait
+        // for the next transition to learn whether the bridge is already up.
+        listener(connected)
+    }
+
+    fun removeConnectionListener(listener: (Boolean) -> Unit) {
+        connectionListeners -= listener
+    }
+
+    private fun notifyConnection(connectedNow: Boolean) {
+        connectionListeners.forEach { listener ->
+            runCatching { listener(connectedNow) }
+        }
+    }
+
     private val started = AtomicBoolean(false)
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "bubble-bridge") }
 
@@ -52,7 +76,12 @@ object RemoteBridge {
             }
 
             override fun onServiceDied(service: XposedService) {
-                worker.execute { if (boundService === service) { remote = null; boundService = null } }
+                worker.execute {
+                    if (boundService === service) {
+                        remote = null; boundService = null
+                        notifyConnection(false)
+                    }
+                }
             }
         })
     }
@@ -71,6 +100,7 @@ object RemoteBridge {
             Log.i("BubbleDrawer", "BRIDGE_CONNECTED " + (frameworkLabel ?: ""))
             migrateLegacyPins(context, prefs)
             syncLocal(context) // always re-push local truth; keeps remote consistent after reboot
+            notifyConnection(true)
         } catch (exception: RuntimeException) {
             Log.w("BubbleDrawer", "BRIDGE_BIND_FAILED", exception)
         }
@@ -96,10 +126,15 @@ object RemoteBridge {
             .putBoolean(RemotePrefs.KEY_RIGHT, snap.right)
             .putInt(RemotePrefs.KEY_RANGE_DP, snap.rangeDp)
             .putBoolean(RemotePrefs.KEY_FREEFORM, snap.freeform)
+            .putInt(RemotePrefs.KEY_BOTTOM_DP, snap.bottomDp)
+            .putInt(RemotePrefs.KEY_EDGE_DP, snap.edgeDp)
             .putInt(RemotePrefs.KEY_PANEL_W_PCT, snap.panelWidthPct)
             .putInt(RemotePrefs.KEY_PANEL_H_PCT, snap.panelHeightPct)
             .putInt(RemotePrefs.KEY_PANEL_ICON_DP, snap.panelIconDp)
             .putInt(RemotePrefs.KEY_PANEL_TEXT_SP, snap.panelTextSp)
+            .putInt(RemotePrefs.KEY_FAN_ICON_COUNT, snap.fanIconCount)
+            .putInt(RemotePrefs.KEY_FAN_RADIUS_DP, snap.fanRadiusDp)
+            .putInt(RemotePrefs.KEY_PANEL_DISMISS_OUTSIDE, snap.panelDismissOutside)
             .commit() // synchronous: LSPosed mirrors the group only after the write lands
         Log.i(
             "BubbleDrawer",

@@ -1,8 +1,11 @@
 package com.repl.bubbledrawer.pin
 
+import androidx.compose.runtime.Immutable
 import com.repl.bubbledrawer.data.PinnedRef
 import com.repl.bubbledrawer.pinyin.AppSortKey
 import com.repl.bubbledrawer.pinyin.BubbleApp
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.toImmutableList
 
 /**
  * Flat cell model for the pin-manager grid.
@@ -13,15 +16,22 @@ import com.repl.bubbledrawer.pinyin.BubbleApp
  *  - letter area: rows grouped 4-per-line via C2875i subList chunks (:561/:615) with
  *    section labels — identical visual result to one grid with span=1 cells and
  *    full-span label rows (LightWeightOpenSettings' SpanSizeLookup idiom :193-198).
+ *
+ * The list is an [ImmutableList] produced HERE (docs/ui-guidelines.md "强跳过友好的状态
+ * 形状"): converting at the UI layer would leave every intermediate composable unskippable.
  */
+@Immutable
 sealed interface Cell {
     data object PinHead : Cell                 // 已添加 + 长按拖动图标以排序 (app_settings_item_head)
-    data object EmptyHint : Cell               // 暂无已添加应用 (app_settings_item_selected click_add_tip,
-                                               // visibility VISIBLE(0) only while pins empty — :1034)
+    data object EmptyHint : Cell               // 暂无已添加应用 (click_add_tip, only while pins empty)
     data class Label(val text: String) : Cell  // ★/推荐/A..Z/# group header
     data class Pin(val app: BubbleApp) : Cell  // pinned slot, drag-reorderable
-    data class App(val app: BubbleApp) : Cell  // regular grid cell
+    /** @param section owning group label — lazy-grid keys need it (recommend + letter
+     *  groups overlap by design, so pkg alone is not unique). */
+    data class App(val app: BubbleApp, val section: String) : Cell  // regular grid cell
 }
+
+private fun MutableList<Cell>.addApp(app: BubbleApp, section: String) = add(Cell.App(app, section))
 
 object Sections {
 
@@ -31,7 +41,7 @@ object Sections {
         all: List<BubbleApp>,
         pins: List<PinnedRef>,
         recommend: Boolean,
-    ): List<Cell> {
+    ): ImmutableList<Cell> {
         val pinnedPkgs = pins.map { it.packageName }.toSet()
         val out = ArrayList<Cell>()
 
@@ -54,7 +64,7 @@ object Sections {
                 .take(RECOMMEND_TOP_N)
             if (rec.isNotEmpty()) {
                 out.add(Cell.Label("推荐"))
-                rec.forEach { out.add(Cell.App(it)) }
+                rec.forEach { out.addApp(it, "推荐") }
             }
         }
 
@@ -65,9 +75,9 @@ object Sections {
         }
         for (k in groups.keys.sortedWith(AppSortKey.SECTION_LETTER)) {
             out.add(Cell.Label(k))
-            groups.getValue(k).sortedWith(AppSortKey.DEFAULT).forEach { out.add(Cell.App(it)) }
+            groups.getValue(k).sortedWith(AppSortKey.DEFAULT).forEach { out.addApp(it, k) }
         }
-        return out
+        return out.toImmutableList()
     }
 
     /** Group labels present (for the index bar), in display order. */

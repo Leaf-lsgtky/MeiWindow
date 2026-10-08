@@ -1,40 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- names + values copied verbatim from the decompiled APK values (see spec §6.5) -->
-    <dimen name="fd_sys_margin_small">8dp</dimen>
-    <dimen name="fd_sys_margin_regular">12dp</dimen>
-    <dimen name="fd_sys_margin_medium">16dp</dimen>
-    <dimen name="fd_sys_margin_large">20dp</dimen>
-    <dimen name="head_item_padding_top">18dp</dimen>
-
+    <!-- Only what the surviving View island still consumes: the fan tile layout
+         (slide_gesture_list_item.xml) and the fan ring radius read in bubble/ code.
+         All page-side sizes are Compose dp now. -->
     <dimen name="slide_gesture_item_padding">3.25dp</dimen>
     <dimen name="launcher_app_item_icon_width">44dp</dimen>
     <dimen name="slide_gesture_launcher_item_radius">277dp</dimen>
     <dimen name="slide_gesture_launcher_item_radius_no_nav_bar">242dp</dimen>
-
-    <dimen name="launcher_app_item_width">70dp</dimen>
-    <dimen name="launcher_app_item_height">84dp</dimen>
-    <dimen name="launcher_more_app_item_width">66dp</dimen>
-    <dimen name="launcher_more_app_item_height">91dp</dimen>
-
-    <dimen name="slide_launcher_app_setting_pin_tab_layout_height">54dp</dimen>
-    <dimen name="slide_trigger_scroll_distance">50dp</dimen>
-
-    <dimen name="mc_fastscroll_letter_layout_wdith">28dp</dimen>
-    <dimen name="mc_fastscroll_letter_text_size">12px</dimen>
-    <dimen name="mc_fastscroll_letter_layout_padding_right">4dp</dimen>
-    <dimen name="mc_fastscroll_letter_overlay_layout_width">59dp</dimen>
-    <dimen name="mc_fastscroll_letter_overlay_layout_margin_right">44dp</dimen>
-    <dimen name="mc_fastscroll_letter_overlay_text_size">32.5sp</dimen>
-    <dimen name="mc_fastscroll_letter_overlay_two_text_size">18sp</dimen>
-    <dimen name="mc_fastscroll_letter_overlay_three_text_size">16sp</dimen>
-    <dimen name="mc_fastscroll_letter_scroll_bar_width">4.76dp</dimen>
-    <dimen name="mc_fastscroll_navigation_letter_selected_background_radius">7dp</dimen>
-    <dimen name="mc_fastscroll_navigation_letter_vertical_space">4dp</dimen>
-    <dimen name="fastscroller_letterbar_image_width">12dp</dimen>
-    <dimen name="fastscroller_letterbar_padding_top">50dp</dimen>
-    <dimen name="fastscroller_letterbar_padding_bottom">50dp</dimen>
-    <dimen name="fastscroller_letterbar_padding_right">3dp</dimen>
-    <dimen name="slide_launcher_app_setting_navigation_letter_margin_top">20dp</dimen>
-    <dimen name="fd_sys_radius_corner_stroke_width">1dp</dimen>
 </resources>

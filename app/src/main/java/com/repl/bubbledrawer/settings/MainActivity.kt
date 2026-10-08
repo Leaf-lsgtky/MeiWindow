@@ -1,234 +1,122 @@
 package com.repl.bubbledrawer.settings
 
-import android.app.AlertDialog
 import android.os.Bundle
-import android.view.View
-import android.widget.Button
-import android.widget.CheckBox
-import android.widget.SeekBar
-import android.widget.TextView
-import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
-import com.repl.bubbledrawer.R
-import com.repl.bubbledrawer.pin.PinManageActivity
-import com.repl.bubbledrawer.xposed.RemoteBridge
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.repl.bubbledrawer.ui.component.TriggerZonePreview
+import com.repl.bubbledrawer.ui.theme.BubbleDrawerTheme
 import com.repl.bubbledrawer.xposed.SettingsStore
-import android.content.Intent
+import top.yukonga.miuix.kmp.nav.core.NavDisplay
+import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
+import top.yukonga.miuix.kmp.nav.core.navBackStackOf
+import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
+import top.yukonga.miuix.kmp.nav.transition.NavSwipeDirection
 
 /**
- * Settings hub — now the front-end of the LSPosed MODULE: the fan and corner
- * capture run inside SystemUI (xposed/CornerInputMonitor + xposed/FanHost),
- * configured live through RemotePrefs.GROUP (LSPosed mirrors that file into the
- * hooked process; changes apply without restart).
+ * Settings hub — hosts Miuix NavDisplay with native HyperOS slide transitions,
+ * gesture swiping, and corner clipping.
  */
-class MainActivity : AppCompatActivity() {
-
-    private var suppressListener = false
-    private var switchView: CheckBox? = null
-    private var statusView: TextView? = null
+class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(buildUi())
-    }
+        enableEdgeToEdge()
+        val actions = StoreSettingsActions(applicationContext)
+        val stateFlow = SettingsStore.observe(applicationContext)
+        setContent {
+            BubbleDrawerTheme {
+                val state by stateFlow.collectAsStateWithLifecycle(
+                    initialValue = SettingsStore.currentState(applicationContext),
+                )
+                val backStack = remember { navBackStackOf(BubbleScreen.Main) }
+                val swipeBack = if (LocalLayoutDirection.current == LayoutDirection.Rtl) {
+                    NavSwipeDirection.RightToLeft
+                } else {
+                    NavSwipeDirection.LeftToRight
+                }
+                var previewTriggerZone by remember { mutableStateOf(false) }
 
-    override fun onResume() {
-        super.onResume()
-        refreshState()
-    }
+                BackHandler(enabled = previewTriggerZone) {
+                    previewTriggerZone = false
+                }
 
-    private fun refreshState() {
-        val snap = SettingsStore.snapshot(this)
-        statusView?.text = getString(
-            R.string.module_status,
-            if (RemoteBridge.connected) {
-                getString(R.string.module_connected, RemoteBridge.frameworkLabel ?: "?")
-            } else {
-                getString(R.string.module_disconnected)
-            },
-        )
-        val cb = switchView
-        suppressListener = true
-        cb?.isChecked = snap.enabled
-        suppressListener = false
-    }
+                Box(modifier = Modifier.fillMaxSize()) {
+                    NavDisplay(
+                        backStack = backStack,
+                        modifier = Modifier.fillMaxSize(),
+                        effects = NavDisplayEffects(cornerClipRadius = rememberNavSystemCornerRadius()),
+                        onBack = {
+                            if (backStack.size > 1) {
+                                backStack.removeAt(backStack.lastIndex)
+                            }
+                        },
+                    ) {
+                        entry<BubbleScreen.Main>(swipeDismiss = NavSwipeDirection.None) {
+                            MainSettingsScreen(
+                                state = state,
+                                actions = actions,
+                                onNavigateToTrigger = { backStack.add(BubbleScreen.Trigger) },
+                                onNavigateToFan = { backStack.add(BubbleScreen.Fan) },
+                                onNavigateToMorePanel = { backStack.add(BubbleScreen.MorePanel) },
+                            )
+                        }
+                        entry<BubbleScreen.Trigger>(swipeDismiss = swipeBack) {
+                            TriggerSettingsScreen(
+                                state = state,
+                                actions = actions,
+                                onBack = {
+                                    if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+                                },
+                                onPreviewTriggerZone = { previewTriggerZone = true },
+                            )
+                        }
+                        entry<BubbleScreen.Fan>(swipeDismiss = swipeBack) {
+                            FanSettingsScreen(
+                                state = state,
+                                actions = actions,
+                                onBack = {
+                                    if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+                                },
+                            )
+                        }
+                        entry<BubbleScreen.MorePanel>(swipeDismiss = swipeBack) {
+                            MorePanelSettingsScreen(
+                                state = state,
+                                actions = actions,
+                                onBack = {
+                                    if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+                                },
+                            )
+                        }
+                    }
 
-    private fun buildUi(): View {
-        val root = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(dp(20), dp(12), dp(20), dp(12))
-        }
-        fun add(v: View) = root.addView(
-            v,
-            android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(10) },
-        )
-
-        val cb = CheckBox(this).apply {
-            setText(R.string.enable_service)
-            setOnCheckedChangeListener { _, checked ->
-                if (!suppressListener) SettingsStore.setEnabled(this@MainActivity, checked)
-                refreshState()
+                    AnimatedVisibility(
+                        visible = previewTriggerZone,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                    ) {
+                        TriggerZonePreview(
+                            snap = state.snapshot,
+                            onDismiss = { previewTriggerZone = false },
+                        )
+                    }
+                }
             }
         }
-        switchView = cb
-        add(cb)
-
-        add(TextView(this).apply { statusView = this; textSize = 12f })
-
-        add(TextView(this).apply { setText(R.string.module_howto) })
-
-        add(Button(this).apply {
-            text = getString(R.string.trigger_pos) + ": " + posLabel()
-            setOnClickListener { pickTriggerPos() }
-        })
-
-        add(TextView(this).apply { setText(R.string.range_title) })
-        add(SeekBar(this).apply {
-            max = MAX_DP - MIN_DP
-            progress = SettingsStore.snapshot(this@MainActivity).rangeDp - MIN_DP
-            onSeek { set ->
-                SettingsStore.setRangeDp(this@MainActivity, set + MIN_DP)
-                refreshState()
-            }
-        })
-
-        // Trigger REGION (not only its size): the corner is a quarter-ellipse and these two
-        // sliders are its axes — how far it reaches along the bottom edge and up the side
-        // edge. Both default to the radius above.
-        val snap = SettingsStore.snapshot(this)
-        add(TextView(this).apply {
-            setText(getString(R.string.range_bottom) + "：" + snap.bottomDp + "dp")
-        })
-        add(SeekBar(this).apply {
-            max = MAX_DP - MIN_DP
-            progress = snap.bottomDp - MIN_DP
-            onSeek { set ->
-                SettingsStore.setBottomDp(this@MainActivity, set + MIN_DP)
-                recreate()
-            }
-        })
-        add(TextView(this).apply {
-            setText(getString(R.string.range_edge) + "：" + snap.edgeDp + "dp")
-        })
-        add(SeekBar(this).apply {
-            max = MAX_DP - MIN_DP
-            progress = snap.edgeDp - MIN_DP
-            onSeek { set ->
-                SettingsStore.setEdgeDp(this@MainActivity, set + MIN_DP)
-                recreate()
-            }
-        })
-        add(TextView(this).apply { setText(R.string.range_hint); textSize = 12f })
-
-        // freeform ("小窗启动") toggle — where the device supports desktop/freeform
-        // windows the app floats over the current page; otherwise fullscreen
-        add(CheckBox(this).apply {
-            setText(R.string.freeform_toggle)
-            isChecked = SettingsStore.snapshot(this@MainActivity).freeform
-            setOnCheckedChangeListener { _, checked ->
-                SettingsStore.setFreeform(this@MainActivity, checked)
-                Toast.makeText(this@MainActivity, R.string.freeform_hint, Toast.LENGTH_LONG).show()
-            }
-        })
-
-        // 更多面板（方案 B overlay）外观：长 / 宽 / 图标 / 文字。面板始终居中，
-        // 长宽是"占屏幕的百分比"（0 = 默认 62 %），不是相对当前小窗的缩放。
-        add(TextView(this).apply { setText(R.string.panel_section_title) })
-        add(TextView(this).apply {
-            setText(getString(R.string.panel_width) + "：" + pctLabel(snap.panelWidthPct))
-        })
-        add(SeekBar(this).apply {
-            max = PANEL_PCT_MAX - PANEL_PCT_MIN + 1
-            progress = if (snap.panelWidthPct == 0) 0 else snap.panelWidthPct - PANEL_PCT_MIN + 1
-            onSeek { set ->
-                SettingsStore.setPanelWidthPct(this@MainActivity, if (set == 0) 0 else set + PANEL_PCT_MIN - 1)
-                recreate()
-            }
-        })
-        add(TextView(this).apply {
-            setText(getString(R.string.panel_height) + "：" + pctLabel(snap.panelHeightPct))
-        })
-        add(SeekBar(this).apply {
-            max = PANEL_PCT_MAX - PANEL_PCT_MIN + 1
-            progress = if (snap.panelHeightPct == 0) 0 else snap.panelHeightPct - PANEL_PCT_MIN + 1
-            onSeek { set ->
-                SettingsStore.setPanelHeightPct(this@MainActivity, if (set == 0) 0 else set + PANEL_PCT_MIN - 1)
-                recreate()
-            }
-        })
-        add(TextView(this).apply {
-            setText(getString(R.string.panel_icon) + "：" + sizeLabel(snap.panelIconDp, "dp"))
-        })
-        add(SeekBar(this).apply {
-            max = PANEL_ICON_MAX - PANEL_ICON_MIN + 1
-            progress = if (snap.panelIconDp == 0) 0 else snap.panelIconDp - PANEL_ICON_MIN + 1
-            onSeek { set ->
-                SettingsStore.setPanelIconDp(this@MainActivity, if (set == 0) 0 else set + PANEL_ICON_MIN - 1)
-                recreate()
-            }
-        })
-        add(TextView(this).apply {
-            setText(getString(R.string.panel_text) + "：" + sizeLabel(snap.panelTextSp, "sp"))
-        })
-        add(SeekBar(this).apply {
-            max = PANEL_TEXT_MAX - PANEL_TEXT_MIN + 1
-            progress = if (snap.panelTextSp == 0) 0 else snap.panelTextSp - PANEL_TEXT_MIN + 1
-            onSeek { set ->
-                SettingsStore.setPanelTextSp(this@MainActivity, if (set == 0) 0 else set + PANEL_TEXT_MIN - 1)
-                recreate()
-            }
-        })
-        add(Button(this).apply {
-            text = getString(R.string.open_manage)
-            setOnClickListener {
-                startActivity(Intent(this@MainActivity, PinManageActivity::class.java))
-            }
-        })
-        refreshState()
-        return root
-    }
-
-    private fun posLabel() = arrayOf(
-        getString(R.string.pos_both), getString(R.string.pos_left), getString(R.string.pos_right),
-    )[SettingsStore.triggerPos(this).coerceIn(0, 2)]
-
-    private fun pickTriggerPos() {
-        AlertDialog.Builder(this)
-            .setItems(arrayOf(
-                getString(R.string.pos_both), getString(R.string.pos_left), getString(R.string.pos_right),
-            )) { _, which ->
-                SettingsStore.setTriggerPos(this, which)
-                recreate()
-            }.show()
-    }
-
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
-    private fun pctLabel(v: Int) = if (v == 0) getString(R.string.panel_pct_default) else "$v%"
-
-    private fun sizeLabel(v: Int, unit: String) =
-        if (v == 0) getString(R.string.panel_default) else "$v$unit"
-
-    private companion object {
-        /** Slider bounds, shared with RemotePrefs.read so the UI cannot drift from the reader. */
-        const val MIN_DP = com.repl.bubbledrawer.xposed.RemotePrefs.MIN_DP
-        const val MAX_DP = com.repl.bubbledrawer.xposed.RemotePrefs.MAX_DP
-        const val PANEL_PCT_MIN = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_PCT_MIN
-        const val PANEL_PCT_MAX = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_PCT_MAX
-        const val PANEL_ICON_MIN = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_ICON_MIN
-        const val PANEL_ICON_MAX = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_ICON_MAX
-        const val PANEL_TEXT_MIN = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_TEXT_MIN
-        const val PANEL_TEXT_MAX = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_TEXT_MAX
-    }
-
-    private fun SeekBar.onSeek(block: (Int) -> Unit) {
-        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {}
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) = block(sb?.progress ?: 0)
-        })
     }
 }

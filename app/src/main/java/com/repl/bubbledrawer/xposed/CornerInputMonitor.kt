@@ -212,6 +212,8 @@ class CornerInputMonitor(
             if (Looper.myLooper() == mainHandler.looper) applySettings() else mainHandler.post(::applySettings)
         }
         registerDebugReceiver()
+        // Pre-warm FanHost and cached apps in background so the very first swipe has apps ready
+        mainHandler.post { runCatching { ensureFan() } }
     }
 
     /**

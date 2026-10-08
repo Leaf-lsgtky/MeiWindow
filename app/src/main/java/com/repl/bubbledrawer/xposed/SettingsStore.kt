@@ -1,10 +1,34 @@
 package com.repl.bubbledrawer.xposed
 
 import android.content.Context
+import android.content.SharedPreferences
+import androidx.compose.runtime.Immutable
 import com.repl.bubbledrawer.data.PinBackend
 import com.repl.bubbledrawer.data.PinCodec
 import com.repl.bubbledrawer.data.PinnedRef
 import com.repl.bubbledrawer.data.PrefsPinBackend
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+
+/**
+ * Immutable UI state for the settings page: one snapshot of the cross-process config
+ * (docs/ui-guidelines.md "强跳过友好的状态形状" — @Immutable, scalar fields only, no
+ * List-typed fields that would defeat skipping).
+ */
+@Immutable
+data class SettingsUiState(
+    val snapshot: RemotePrefs.Snapshot,
+    /** 0 both / 1 left / 2 right — the old page's trigger_pos, kept for parity. */
+    val triggerPos: Int,
+    val connected: Boolean,
+    val frameworkLabel: String?,
+)
 
 /**
  * Single facade over the settings values for the APP process. The local "cfg"
@@ -73,6 +97,14 @@ object SettingsStore {
     /** 更多面板图标 dp / 文字 sp（0 = 布局默认）。 */
     fun setPanelIconDp(context: Context, dp: Int) = putInt(context, RemotePrefs.KEY_PANEL_ICON_DP, dp)
     fun setPanelTextSp(context: Context, sp: Int) = putInt(context, RemotePrefs.KEY_PANEL_TEXT_SP, sp)
+    /** 更多面板点击外部收起方式（0 = 单击，1 = 双击）。 */
+    fun setPanelDismissOutside(context: Context, mode: Int) = putInt(context, RemotePrefs.KEY_PANEL_DISMISS_OUTSIDE, mode.coerceIn(0, 1))
+
+    /** 扇形面板应用图标数量（5 或 6）。 */
+    fun setFanIconCount(context: Context, count: Int) = putInt(context, RemotePrefs.KEY_FAN_ICON_COUNT, count.coerceIn(5, 6))
+
+    /** 展开扇形半径（dp）。 */
+    fun setFanRadiusDp(context: Context, dp: Int) = putInt(context, RemotePrefs.KEY_FAN_RADIUS_DP, dp.coerceIn(RemotePrefs.FAN_RADIUS_MIN, RemotePrefs.FAN_RADIUS_MAX))
 
     private fun putInt(context: Context, key: String, value: Int) {
         RemoteBridge.local(context).edit().putInt(key, value).apply()
@@ -101,4 +133,63 @@ object SettingsStore {
 
     /** Encode/decode passthroughs keep the call sites honest about the format. */
     fun encodePins(list: List<PinnedRef>): String = PinCodec.encode(list)
+
+    /**
+     * Reactive snapshot the Compose settings page collects
+     * (docs/ui-guidelines.md "Flow 收集": screens use `collectAsStateWithLifecycle`, never
+     * poll in recomposition — and the old page's `recreate()`-to-rerender hack dies here).
+     *
+     * Emits on: any write through [SettingsStore] (local file listener sees them all),
+     * remote-group changes surfaced by LSPosed, and bridge bind/die transitions (the
+     * reader switches between the remote group and the offline mirror).
+     */
+    fun observe(context: Context): Flow<SettingsUiState> = callbackFlow {
+        val app = context.applicationContext
+        val local = RemoteBridge.local(app)
+
+        fun push() { trySend(currentState(app)) }
+
+        val localListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> push() }
+        local.registerOnSharedPreferenceChangeListener(localListener)
+
+        // The remote proxy may appear/disappear at any time; (re)register while present.
+        var remoteListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+        fun attachRemote() {
+            val r = RemoteBridge.remote ?: return
+            if (remoteListener != null) return
+            val l = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> push() }
+            remoteListener = l
+            runCatching { r.registerOnSharedPreferenceChangeListener(l) }
+        }
+        fun detachRemote() {
+            val l = remoteListener ?: return
+            remoteListener = null
+            runCatching { RemoteBridge.remote?.unregisterOnSharedPreferenceChangeListener(l) }
+        }
+
+        val connectionListener: (Boolean) -> Unit = { connected ->
+            if (connected) attachRemote() else detachRemote()
+            push()
+        }
+        RemoteBridge.addConnectionListener(connectionListener)
+        attachRemote()
+
+        push() // initial value without waiting for a first event
+        awaitClose {
+            RemoteBridge.removeConnectionListener(connectionListener)
+            detachRemote()
+            local.unregisterOnSharedPreferenceChangeListener(localListener)
+        }
+    }
+        .buffer(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        .distinctUntilChanged()
+        .flowOn(Dispatchers.Main)
+
+    /** Current UI state: snapshot + bridge status in one @Immutable value. */
+    fun currentState(context: Context): SettingsUiState = SettingsUiState(
+        snapshot = snapshot(context),
+        triggerPos = triggerPos(context),
+        connected = RemoteBridge.connected,
+        frameworkLabel = RemoteBridge.frameworkLabel,
+    )
 }

@@ -51,26 +51,48 @@ object RemotePrefs {
     const val DEFAULT_RANGE_DP = 96
     const val DEFAULT_FREEFORM = false
 
-    /**
-     * 更多面板尺寸/字号（方案 B overlay）。面板始终居中，所以位置没有 key：
-     * 长/宽是"占屏幕的百分比"（0 = [PANEL_PCT_DEFAULT]，即 62 % 屏幕）。
-     */
+    /** 更多面板长宽/图标/文字 默认值与范围 */
     const val KEY_PANEL_W_PCT = "panel_width_pct"
     const val KEY_PANEL_H_PCT = "panel_height_pct"
     const val KEY_PANEL_ICON_DP = "panel_icon_dp"
     const val KEY_PANEL_TEXT_SP = "panel_text_sp"
 
-    /** 0 = 用面板的默认占地（62 % 屏幕，见 FanHost.DEFAULT_PANEL_PCT）。 */
-    const val PANEL_PCT_DEFAULT = 0
     const val PANEL_PCT_MIN = 40
     const val PANEL_PCT_MAX = 100
-    const val PANEL_ICON_DEFAULT = 0
+
+    const val DEFAULT_PANEL_W_PCT = 80
+    const val PANEL_W_PCT_MIN = PANEL_PCT_MIN
+    const val PANEL_W_PCT_MAX = PANEL_PCT_MAX
+
+    const val DEFAULT_PANEL_H_PCT = 70
+    const val PANEL_H_PCT_MIN = PANEL_PCT_MIN
+    const val PANEL_H_PCT_MAX = PANEL_PCT_MAX
+
+    const val DEFAULT_PANEL_ICON_DP = 45
     const val PANEL_ICON_MIN = 28
     const val PANEL_ICON_MAX = 64
-    const val PANEL_TEXT_DEFAULT = 0
-    const val PANEL_TEXT_MIN = 10
-    const val PANEL_TEXT_MAX = 20
 
+    const val DEFAULT_PANEL_TEXT_SP = 10
+    const val PANEL_TEXT_MIN = 8
+    const val PANEL_TEXT_MAX = 18
+
+    /** 更多面板点击外部收起方式：0 = 单击，1 = 双击 */
+    const val KEY_PANEL_DISMISS_OUTSIDE = "panel_dismiss_outside"
+    const val DISMISS_OUTSIDE_SINGLE = 0
+    const val DISMISS_OUTSIDE_DOUBLE = 1
+    const val DEFAULT_PANEL_DISMISS_OUTSIDE = DISMISS_OUTSIDE_SINGLE
+
+    /** 扇形面板应用图标数量：5 或 6 个 */
+    const val KEY_FAN_ICON_COUNT = "fan_icon_count"
+    const val DEFAULT_FAN_ICON_COUNT = 6
+
+    /** 展开扇形半径（dp） */
+    const val KEY_FAN_RADIUS_DP = "fan_radius_dp"
+    const val DEFAULT_FAN_RADIUS_DP = 260
+    const val FAN_RADIUS_MIN = 180
+    const val FAN_RADIUS_MAX = 360
+
+    @androidx.compose.runtime.Immutable
     data class Snapshot(
         val enabled: Boolean,
         val left: Boolean,
@@ -80,11 +102,17 @@ object RemotePrefs {
         val edgeDp: Int,
         val freeform: Boolean,
         val pins: String,
-        /** 更多面板：宽/高百分比（0 = 默认 62 % 屏幕，始终居中），图标 dp / 文字 sp（0 = 布局默认） */
-        val panelWidthPct: Int = PANEL_PCT_DEFAULT,
-        val panelHeightPct: Int = PANEL_PCT_DEFAULT,
-        val panelIconDp: Int = PANEL_ICON_DEFAULT,
-        val panelTextSp: Int = PANEL_TEXT_DEFAULT,
+        /** 更多面板：宽/高百分比，图标 dp / 文字 sp */
+        val panelWidthPct: Int = DEFAULT_PANEL_W_PCT,
+        val panelHeightPct: Int = DEFAULT_PANEL_H_PCT,
+        val panelIconDp: Int = DEFAULT_PANEL_ICON_DP,
+        val panelTextSp: Int = DEFAULT_PANEL_TEXT_SP,
+        /** 更多面板点击外部收起方式：0 = 单击，1 = 双击 */
+        val panelDismissOutside: Int = DEFAULT_PANEL_DISMISS_OUTSIDE,
+        /** 扇形面板应用图标数量（5 或 6） */
+        val fanIconCount: Int = DEFAULT_FAN_ICON_COUNT,
+        /** 展开扇形半径（dp） */
+        val fanRadiusDp: Int = DEFAULT_FAN_RADIUS_DP,
     )
 
     fun enabledFor(side: com.repl.bubbledrawer.gesture.SpySide): (Snapshot) -> Boolean = { snap ->
@@ -110,21 +138,16 @@ object RemotePrefs {
             bottomDp = sp.getInt(KEY_BOTTOM_DP, range).coerceIn(MIN_DP, MAX_DP),
             edgeDp = sp.getInt(KEY_EDGE_DP, range).coerceIn(MIN_DP, MAX_DP),
             freeform = sp.getBoolean(KEY_FREEFORM, DEFAULT_FREEFORM),
-            panelWidthPct = pct(sp, KEY_PANEL_W_PCT),
-            panelHeightPct = pct(sp, KEY_PANEL_H_PCT),
-            panelIconDp = sizeOrZero(sp, KEY_PANEL_ICON_DP, PANEL_ICON_MIN, PANEL_ICON_MAX),
-            panelTextSp = sizeOrZero(sp, KEY_PANEL_TEXT_SP, PANEL_TEXT_MIN, PANEL_TEXT_MAX),
+            panelWidthPct = sp.getInt(KEY_PANEL_W_PCT, DEFAULT_PANEL_W_PCT).let { if (it <= 0) DEFAULT_PANEL_W_PCT else it.coerceIn(PANEL_W_PCT_MIN, PANEL_W_PCT_MAX) },
+            panelHeightPct = sp.getInt(KEY_PANEL_H_PCT, DEFAULT_PANEL_H_PCT).let { if (it <= 0) DEFAULT_PANEL_H_PCT else it.coerceIn(PANEL_H_PCT_MIN, PANEL_H_PCT_MAX) },
+            panelIconDp = sp.getInt(KEY_PANEL_ICON_DP, DEFAULT_PANEL_ICON_DP).let { if (it <= 0) DEFAULT_PANEL_ICON_DP else it.coerceIn(PANEL_ICON_MIN, PANEL_ICON_MAX) },
+            panelTextSp = sp.getInt(KEY_PANEL_TEXT_SP, DEFAULT_PANEL_TEXT_SP).let { if (it <= 0) DEFAULT_PANEL_TEXT_SP else it.coerceIn(PANEL_TEXT_MIN, PANEL_TEXT_MAX) },
+            panelDismissOutside = sp.getInt(KEY_PANEL_DISMISS_OUTSIDE, DEFAULT_PANEL_DISMISS_OUTSIDE).coerceIn(0, 1),
+            fanIconCount = sp.getInt(KEY_FAN_ICON_COUNT, DEFAULT_FAN_ICON_COUNT).coerceIn(5, 6),
+            fanRadiusDp = sp.getInt(KEY_FAN_RADIUS_DP, DEFAULT_FAN_RADIUS_DP).let { if (it <= 0) DEFAULT_FAN_RADIUS_DP else it.coerceIn(FAN_RADIUS_MIN, FAN_RADIUS_MAX) },
             pins = sp.getString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, "").orEmpty(),
         )
     }
-
-    /** 0 = 面板默认占地 / 布局默认；否则夹进滑块区间。 */
-    private fun pct(sp: SharedPreferences, key: String): Int =
-        sp.getInt(key, PANEL_PCT_DEFAULT).let { if (it <= 0) 0 else it.coerceIn(PANEL_PCT_MIN, PANEL_PCT_MAX) }
-
-    private fun sizeOrZero(sp: SharedPreferences, key: String, min: Int, max: Int): Int =
-        sp.getInt(key, 0).let { if (it <= 0) 0 else it.coerceIn(min, max) }
-
     /** Slider bounds for every axis (kept in one place so UI and reader cannot drift). */
     const val MIN_DP = 24
     const val MAX_DP = 160

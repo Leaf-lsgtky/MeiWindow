@@ -1,0 +1,38 @@
+[versions]
+agp = "9.4.1"
+kotlin = "2.4.10"
+activityCompose = "1.13.0"
+composeBom = "2026.06.01"
+lifecycle = "2.11.0"
+coroutines = "1.11.0"
+miuix = "0.9.4-rc01"
+immutable = "0.5.2"
+libxposed = "102.0.0"
+hiddenApiBypass = "6.1"
+
+[libraries]
+androidx-core-ktx = { module = "androidx.core:core-ktx", version = "1.19.1" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-foundation = { module = "androidx.compose.foundation:foundation" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-annotation = { module = "androidx.annotation:annotation", version = "1.10.0" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-collections-immutable = { module = "org.jetbrains.kotlinx:kotlinx-collections-immutable", version.ref = "immutable" }
+miuix-ui = { module = "top.yukonga.miuix.kmp:miuix-ui-android", version.ref = "miuix" }
+miuix-preference = { module = "top.yukonga.miuix.kmp:miuix-preference-android", version.ref = "miuix" }
+miuix-icons = { module = "top.yukonga.miuix.kmp:miuix-icons-android", version.ref = "miuix" }
+miuix-blur = { module = "top.yukonga.miuix.kmp:miuix-blur-android", version.ref = "miuix" }
+miuix-nav = { module = "top.yukonga.miuix.kmp:miuix-nav-android", version.ref = "miuix" }
+material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
+circleimageview = { module = "de.hdodenhof:circleimageview", version = "3.1.0" }
+hiddenapibypass = { module = "org.lsposed.hiddenapibypass:hiddenapibypass", version.ref = "hiddenApiBypass" }
+libxposed-api = { module = "io.github.libxposed:api", version.ref = "libxposed" }
+libxposed-service = { module = "io.github.libxposed:service", version.ref = "libxposed" }
+junit = { module = "junit:junit", version = "4.13.2" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

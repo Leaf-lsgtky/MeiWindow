@@ -1,25 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- zh-rCN strings copied verbatim from decompiled values-zh-rCN/strings.xml -->
-    <string name="app_name">气泡抽屉</string>
-    <string name="gesture_more_app_window_title">更多应用</string>
-    <string name="more_app_window_add_app">添加应用</string>
-    <string name="more_item_label">更多</string>
-    <string name="recommend">推荐</string>
-    <string name="slide_launcher_recent_title">最近</string>
-    <string name="slide_launcher_recent_clear">清除</string>
-    <string name="settings_tips_click_to_add_app">暂无已添加应用</string>
+    <string name="app_name">魅窗</string>
+    <string name="settings_tips_click_to_add_app">暂无收藏应用</string>
     <string name="slide_app_settings_drag_tips">长按拖动图标以排序</string>
-    <string name="slide_launch_app_has_selected">已添加</string>
+    <string name="slide_launch_app_has_selected">收藏</string>
     <string name="slide_launcher_tab_all_app">应用</string>
-    <string name="slide_launcher_tab_all_shortcut">功能</string>
     <string name="action_app_manager">管理</string>
     <string name="action_app_manager_complate">完成</string>
-    <string name="slide_launch_app_settings_title">选择快捷启动的应用</string>
+    <string name="slide_launch_app_settings_title">更多应用</string>
 
     <!-- app-specific (not part of the replica surface) -->
-    <string name="enable_service">启用角落手势（需 LSPosed 模块激活）</string>
-    <string name="module_status">模块状态：%1$s</string>
+    <string name="enable_service">启用角落手势</string>
     <string name="module_connected">已连接（%1$s）</string>
     <string name="module_disconnected">未连接：请在 LSPosed 中启用本模块并勾选 SystemUI，然后重启 SystemUI</string>
     <string name="module_howto">角落手势与扇形面板运行在系统界面（SystemUI）进程内：安装本 APK 后，在 LSPosed 中启用模块、作用域勾选「系统界面」（com.android.systemui），重启 SystemUI 即生效；设置改动实时同步，无需重启。系统原生贴边返回手势不受影响——只有明确的内滑上提才会被接管。</string>
@@ -31,7 +23,40 @@
     <string name="pos_both">底部双侧</string>
     <string name="pos_left">仅左角</string>
     <string name="pos_right">仅右角</string>
-    <string name="freeform_toggle">小窗启动（支持的设备上悬浮于当前页）</string>
+    <string name="freeform_toggle">小窗启动</string>
     <string name="freeform_hint">需系统支持：开发者选项开启“桌面模式/自由窗口”，或 Android 16 桌面窗口。不支持时自动回退全屏。</string>
     <string name="open_manage">打开固定管理</string>
+
+    <!-- miuix Compose UI -->
+    <string name="settings_title">魅窗</string>
+    <string name="dp_value">%1$d dp</string>
+    <string name="sp_value">%1$d sp</string>
+    <string name="pct_value">%1$d%%</string>
+    <string name="back">返回</string>
+    <string name="manage_close">关闭</string>
+    <string name="fan_section_title">扇形面板</string>
+    <string name="fan_icon_count">扇形应用图标数量</string>
+    <string name="fan_icon_count_5">5 个应用</string>
+    <string name="fan_icon_count_6">6 个应用</string>
+    <string name="fan_radius">展开扇形半径</string>
+    <string name="preview_trigger_zone">预览触发区域</string>
+    <string name="preview_zone_title">触发区域预览</string>
+    <string name="preview_zone_dims">沿底边 %1$d dp · 沿侧边 %2$d dp</string>
+    <string name="preview_zone_tap_dismiss">点击屏幕任意位置退出</string>
+    <string name="status_connected">已连接</string>
+    <string name="status_disconnected">未连接</string>
+    <string name="status_connected_desc">魅窗模块运行中</string>
+    <string name="status_disconnected_desc">模块未激活或未运行，请检查 LSPosed 并在生效后重启 SystemUI</string>
+    <string name="global_section_title">快捷开关</string>
+    <string name="category_section_title">功能设置</string>
+    <string name="category_trigger">触发手势与区域</string>
+    <string name="category_trigger_summary">触发位置 · 沿底边/侧边范围 · 区域预览</string>
+    <string name="category_fan">扇形面板外观</string>
+    <string name="category_fan_summary">应用图标数量 · 展开扇形半径</string>
+    <string name="category_panel">更多应用面板</string>
+    <string name="category_panel_summary">面板尺寸 · 图标与文字大小 · 外部收起方式</string>
+    <string name="category_manage">收藏应用管理</string>
+    <string name="category_manage_summary">排序与增删快捷启动应用</string>
+    <string name="fan_hint">从屏幕左右下角向内滑出手势，即可展开环形扇形面板；手指移至图标上方松手即可快捷启动。若启用了小窗模式，应用将以悬浮小窗打开。</string>
+    <string name="more_panel_hint">点击扇形面板上的“更多”图标即可打开更多应用面板，支持在全量应用列表中快速查找与启动。</string>
 </resources>
