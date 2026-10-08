@@ -1,5 +1,10 @@
 # Flyme 气泡抽屉复刻 — 实施计划
 
+> **已过时（历史记录）**：本计划里的"更多页 / `MoreList` / `MoreAppWindow` 移植"已被
+> **方案 B** 取代 —— 尾部"更多"瓦片不再另开列表页，而是在当前窗口上方浮出同一个固定管理页
+> （`pin/PinManageView.kt` overlay）。当前设计见 `README.md` 的""更多"面板（方案 B）"一节；
+> 文中的 `more/` 包与 `MoreListTest` 已删除。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpower-subagent-driven-development (recommended) or superpower-executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 构建独立 APK `com.repl.bubbledrawer`，复刻 Flyme 边角滑出气泡条（逐个弧形错峰展开）、更多页、固定管理（拼音 A–Z 分组+索引条），点选暂时全屏启动。
