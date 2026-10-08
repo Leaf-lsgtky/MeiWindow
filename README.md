@@ -150,6 +150,20 @@ adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracin
 
 - **带内（底边上方 28dp）**：DOWN 当场 `pilferPointers()` 拿下，不再和它抢；
 - **带外**：维持"先观察、过阈值才认领"的透传语义，角落轻点/应用内拖动不受影响；
+
+#### 现在默认走"夺回"而不是"预占"（无需猜测区域）
+
+真机日志显示：能被抢走的笔都在底边带内，而**带外**的笔照常认领成功；每次失败的形态都是
+"我们正在观察的那笔被 CANCEL"。于是改成**被动夺回**：平时完全不预占（DOWN 归应用，
+轻点/拖动不受影响），**只有当我们在追踪的那笔手势被外力 CANCEL 掉时**（且距 DOWN ≤120ms，
+即抢流特征）才 `pilferPointers()` 把笔夺回来，并用**原来的 DOWN 起点**继续跑同一个状态机——
+开扇、上滑回桌面、轻点补发的逻辑一字未改，但不再需要"28dp 带子"这个猜测值，也不再
+在 DOWN 时刻吃掉任何东西。
+
+- 夺回成功后若 200ms 内没有后续事件，判定本机"夺不回" → 自动退回旧的"带内预占"模式
+  （日志 `MON_SHADOW_FAILED_FALLBACK_TO_OWNED_BAND`），**不会退化成打不开**；
+- 确认可用则记 `MON_SHADOW_CONFIRMED`，此后一直走优雅路径；
+- 每笔只尝试一次夺回，避免和桌面来回抢（`MON_SHADOW_REPILFER ok=…`）。
 - 带内被我们拿下、最后不是扇子而是**向上滑**时，按桌面自己的公式
   （`down_y - current_y > record_area_height` ≈ 本带高度）**在手指还没抬起时就提交**
   `KEYCODE_HOME`（不再等松手），日志 `MON_UPWARD_REPLAY_HOME`；

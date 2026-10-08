@@ -143,6 +143,26 @@ class CornerInputMonitor(
     private var receiver: InputEventReceiver? = null
     private var stroke: Stroke? = null
 
+    /**
+     * Does "take the gesture back on cancel" work on this device? null = not yet known.
+     * Unknown counts as enabled (the elegant path is tried first); a stroke that never
+     * continues after the re-pilfer flips it to false, and from then on the band inside
+     * the system's bottom gesture area is pre-owned again — the earlier, uglier but
+     * proven behaviour — so the drawer can never regress to "does not open".
+     */
+    private var shadowWorks: Boolean? = null
+    private var shadowEnabled = true
+    private var shadowPending = false
+    private val shadowWatchdog = Runnable {
+        if (shadowPending) {
+            shadowPending = false
+            shadowWorks = false
+            shadowEnabled = false
+            logger(Log.WARN, "MON_SHADOW_FAILED_FALLBACK_TO_OWNED_BAND", null)
+            stroke?.cancel()
+        }
+    }
+
     /** True while the gesture-monitor transport owns corner capture. */
     var monitorActive: Boolean = false
         private set
@@ -306,6 +326,14 @@ class CornerInputMonitor(
 
             MotionEvent.ACTION_MOVE -> {
                 val s = stroke ?: return false
+                if (shadowPending) {
+                    shadowPending = false
+                    mainHandler.removeCallbacks(shadowWatchdog)
+                    if (shadowWorks != true) {
+                        shadowWorks = true
+                        logger(Log.INFO, "MON_SHADOW_CONFIRMED", null)
+                    }
+                }
                 if (!settings.enabled) {
                     s.cancel()
                     return false
@@ -320,16 +348,53 @@ class CornerInputMonitor(
 
             MotionEvent.ACTION_POINTER_DOWN -> stroke?.cancel() // second finger = never the drawer
 
-            MotionEvent.ACTION_UP -> stroke?.let { s ->
-                val index = ev.findPointerIndex(s.pointerId)
-                if (index >= 0) {
-                    s.up(ev, ev.getRawX(index), ev.getRawY(index))
-                } else {
-                    s.up(ev, ev.rawX, ev.rawY)
+            MotionEvent.ACTION_UP -> {
+                if (shadowPending) {
+                    // The UP itself proves the stream came back to us.
+                    shadowPending = false
+                    mainHandler.removeCallbacks(shadowWatchdog)
+                    if (shadowWorks != true) {
+                        shadowWorks = true
+                        logger(Log.INFO, "MON_SHADOW_CONFIRMED_AT_UP", null)
+                    }
+                }
+                stroke?.let { s ->
+                    val index = ev.findPointerIndex(s.pointerId)
+                    if (index >= 0) {
+                        s.up(ev, ev.getRawX(index), ev.getRawY(index))
+                    } else {
+                        s.up(ev, ev.rawX, ev.rawY)
+                    }
                 }
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                val s = stroke
+                // TAKE IT BACK instead of pre-owning: the take-over happens ~8 ms after
+                // DOWN inside the launcher's bottom area, so the stroke we were already
+                // observing gets ACTION_CANCEL. We are allowed to pilfer the gesture from
+                // whoever holds it, and doing it HERE — only when someone actually took
+                // the stroke we were tracking — keeps us a pure observer everywhere else:
+                // no owned band, no swallowed taps, no guessed region. The engine keeps
+                // its original DOWN origin, so the drawer decision is unchanged.
+                if (s != null && s.tracking && !s.claimed && !s.shadowAttempted &&
+                    shadowEnabled && SystemClock.uptimeMillis() - s.downUptime <= TAKEOVER_WINDOW_MS
+                ) {
+                    s.shadowAttempted = true
+                    if (pilferMonitor()) {
+                        s.markTakenOver()
+                        shadowPending = true
+                        logger(
+                            Log.INFO,
+                            "MON_SHADOW_REPILFER ok=true at=${SystemClock.uptimeMillis() - s.downUptime}ms",
+                            null,
+                        )
+                        mainHandler.removeCallbacks(shadowWatchdog)
+                        mainHandler.postDelayed(shadowWatchdog, SHADOW_CONFIRM_MS)
+                        return stroke?.claimed == true
+                    }
+                    logger(Log.WARN, "MON_SHADOW_REPILFER ok=false", null)
+                }
                 logger(
                     Log.INFO,
                     "MON_SYSTEM_CANCEL tracking=${stroke?.tracking} claimed=${stroke?.claimed}",
@@ -379,11 +444,17 @@ class CornerInputMonitor(
         // does not fire", never to "never fires".
         val bottom = displayBounds().bottom
         val inHomeBand = y >= bottom - HOME_GESTURE_BAND_DP * density
-        val owned = inHomeBand && pilferMonitor()
+        // Pre-owning the DOWN is the FALLBACK, used only after a re-pilfer proved that
+        // taking the gesture back does not work on this device. While it is unproven we
+        // stay a pure observer and let the shadow path handle the take-over, which costs
+        // the app nothing at DOWN time.
+        val preOwn = !shadowEnabled && inHomeBand
+        val owned = preOwn && pilferMonitor()
         logger(
             Log.INFO,
-            "MON_DOWN side=$side x=$x y=$y box=${cornerBoxPx()} band=$inHomeBand owned=$owned " +
-                boundsForLog(),
+            "MON_DOWN side=$side x=$x y=$y box=${cornerBoxPx()} band=$inHomeBand " +
+                "mode=${if (owned) "pre-own" else "observe"} " +
+                "shadow=${shadowWorks?.toString() ?: "unknown"} " + boundsForLog(),
             null,
         )
         val config = AdaptiveSpyGestureConfig.create(
@@ -545,15 +616,15 @@ class CornerInputMonitor(
     // ------------------------------------------------------------ shared stroke logic
 
     /**
-     * One stroke. Above the system's bottom band nothing is taken at DOWN: the engine
-     * arms as a pure observer and `Activate` on a MOVE is the only moment the stream is
-     * pilfered. INSIDE the band the stream is already ours from DOWN (`owned`, see
-     * [beginMonitorStroke]) because an outside take-over would otherwise win the ~8 ms
-     * race. Either way a claimed stroke ends through [retractFan], and one we owned but
-     * never claimed replays the system's bottom up-swipe, so the panel is never left
-     * hanging and "swipe up from the bottom to go HOME" keeps working
-     * (reference CornerGestureEngine :113-147; the reference's two-window hand-off lost
-     * exactly that release).
+     * One stroke. Normally the engine arms as a PURE OBSERVER and `Activate` on a MOVE is
+     * the only moment the stream is pilfered; if the launcher takes the gesture away first,
+     * the CANCEL is answered with a re-pilfer ("shadow", see onMonitorEvent) and the same
+     * engine continues from the original DOWN origin. The owned band is only used as a
+     * fallback once that proved not to work on this device. A claimed stroke ends through
+     * [retractFan], and one we hold but never claim replays the system's bottom up-swipe,
+     * so the panel is never left hanging and "swipe up from the bottom to go HOME" keeps
+     * working (reference CornerGestureEngine :113-147; the reference's two-window
+     * hand-off lost exactly that release).
      */
     private inner class Stroke(private val pilfered: (Boolean) -> Unit) {
         private val engine = CornerGestureEngine()
@@ -575,6 +646,14 @@ class CornerInputMonitor(
         var owned = false
             private set
 
+        /** the stream was taken back after someone else's take-over (shadow re-pilfer) */
+        fun markTakenOver() {
+            owned = true
+        }
+
+        /** only ONE take-back attempt per stroke — never ping-pong with the launcher */
+        var shadowAttempted = false
+
         /** the stroke moved like the system's bottom up-swipe, not like the drawer */
         private var upwardIntent = false
 
@@ -582,7 +661,8 @@ class CornerInputMonitor(
         private var upwardCommitted = false
 
         /** ACTION_DOWN uptime — the tap/short-gesture test at release */
-        private var downUptime = 0L
+        var downUptime = 0L
+            private set
 
         /** uptime of the last CLAIMED stroke end (0 = never) — read by [isCornerCommitWindow]. */
         var lastClaimedEndUptime: Long = 0L
@@ -1122,6 +1202,15 @@ class CornerInputMonitor(
 
         /** window in which an injected event is assumed to be our own */
         const val OWN_INJECT_GUARD_MS = 200L
+
+        /**
+         * How soon after DOWN a CANCEL still looks like the launcher's take-over
+         * (measured 6–22 ms) rather than a genuine system cancellation we must respect.
+         */
+        const val TAKEOVER_WINDOW_MS = 120L
+
+        /** how long the stream must continue after a re-pilfer to count as working */
+        const val SHADOW_CONFIRM_MS = 200L
 
         /** Grace after a corner stroke ends during which the native back handler's late
          *  commit attempt for the SAME stroke is still suppressed (main-looper dispatch
