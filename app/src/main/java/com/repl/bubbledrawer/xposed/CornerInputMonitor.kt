@@ -106,15 +106,6 @@ class CornerInputMonitor(
     /** a stroke that moved no further than this counts as a tap at release */
     private val tapSlopPx = touchSlop * 1.5f
 
-    /**
-     * Inward travel at which the stroke is claimed early — see the ACTION_MOVE branch.
-     * 4 dp is above any tap wobble and far below com.miui.home's upward HOME threshold,
-     * so an inward-dominant gesture becomes ours before its home animation can commit.
-     */
-    private val earlyClaimPx = EARLY_CLAIM_DP * density
-
-    /** upward travel at which the system's bottom up-swipe (HOME) is committed */
-    private val homeCommitPx = HOME_GESTURE_BAND_DP * density
 
     /** uptime of the last INJECTED event that was not ours (deviceId < 0) */
     @Volatile
@@ -160,6 +151,30 @@ class CornerInputMonitor(
     private var shadowWorks: Boolean? = null
     private var shadowEnabled = true
     private var shadowPending = false
+
+    /**
+     * Own the DOWN inside the bottom conflict strip (corner columns only)? Decided per stroke
+     * from the arbiter proof (see beginMonitorStroke): the safe default is to own it, because
+     * com.miui.home takes the bottom band over ~9 ms after DOWN and commits its HOME animation
+     * from the very first upward sample — observing and claiming later still lets the phone go
+     * home (reported on device with a real finger; injected-touch probes lack the real finger's
+     * early velocity). Owning the DOWN makes MiuiHome skip its own take-over instead
+     * ("on_pilfered_at_down: passthrough_eligible = true", "skip DOWN pilfer").
+     *
+     * The elegant mode — take nothing at DOWN and let the app keep its touch — needs the
+     * launcher's own recogniser to stop seeing corner DOWNs, which is what
+     * [LauncherMonitorRegion] arranges from system_server (MiuiHome's "[Gesture Monitor]
+     * swipe-up" gets a touchable region with the corner boxes cut out). It publishes that proof
+     * through the shared remote preferences, and only then does this switch to observing.
+     */
+    private var bandPreOwn = true
+
+    /**
+     * Set per stroke from the arbiter proof (see [bandPreOwn]). While true, MiuiHome does not
+     * receive DOWNs inside the corner strip, so gestures there are ours to serve — including
+     * the system's "swipe up = HOME", which the upward-commit path replays.
+     */
+    private var arbiterProven = false
 
     private val shadowWatchdog = Runnable {
         if (shadowPending) {
@@ -356,44 +371,11 @@ class CornerInputMonitor(
                     s.cancel()
                     return false
                 }
-                val mx = ev.getRawX(index)
-                val my = ev.getRawY(index)
-                // WIN THE RACE AGAINST "SWIPE UP = HOME" WITHOUT OWNING THE DOWN.
-                //
-                // The launcher pilfers every DOWN in its bottom area ~9 ms in (measured) and
-                // only then decides what the gesture is: its Rust strings are
-                // " Home gesture recognized, delay pilfer" and
-                // formula=down_y-current_y>record_area_height_px. Once its threshold is
-                // crossed the home animation is committed, so stealing the stroke after
-                // that makes the phone go home *and* open the fan (the reported bug).
-                // Claiming as soon as the finger moves INWARD-DOMINANTLY happens far
-                // earlier than that threshold — 4 dp of inward travel cannot be 30+ dp of
-                // upward travel — so the launcher's animation is cancelled before it
-                // commits and returns to the app, while the drawer keeps the stroke.
-                //
-                // Nothing is taken at DOWN, so taps below the threshold and pure up-swipes
-                // (inward < upward) are never ours: they stay with the app / the launcher.
-                if (!s.owned && !s.claimAttempted) {
-                    val inward = if (s.side == SpySide.LEFT) mx - s.originX else s.originX - mx
-                    val upward = s.originY - my
-                    // EARLY_CLAIM_RATIO forgives a gesture that climbs up to 1.5 px upward per
-                    // px inward (a steep corner drag still becomes the drawer) while a real
-                    // up-swipe, which climbs far faster, is left alone: at the moment 4 dp of
-                    // inward travel is reached such a gesture is already 60+ dp up, and the
-                    // test below is evaluated on every MOVE until it fires.
-                    if (inward >= earlyClaimPx && inward * EARLY_CLAIM_RATIO >= upward) {
-                        s.claimAttempted = true
-                        if (pilferMonitor()) {
-                            s.markTakenOver()
-                            logger(
-                                Log.INFO,
-                                "MON_EARLY_CLAIM inward=${inward.toInt()} up=${upward.toInt()}",
-                                null,
-                            )
-                        }
-                    }
-                }
-                s.move(ev, mx, my)
+                // No direction pre-filtering any more: the corner is a complete sector, so the
+                // engine claims the stroke on radial travel and every direction — straight up
+                // included — becomes the drawer (the vertical-dominant "leave it to the
+                // system's HOME" rule was removed with it).
+                s.move(ev, ev.getRawX(index), ev.getRawY(index))
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> stroke?.cancel() // second finger = never the drawer
@@ -474,21 +456,22 @@ class CornerInputMonitor(
             }
             return
         }
-        // PURE OBSERVER AT DOWN — nothing is taken from the app here.
-        //
-        // Owning the DOWN inside the bottom band was the old fix and it worked, but it
-        // costs the app its touch in that strip (taps had to be handed back by injection).
-        // The take-over is instead beaten by claiming on the first inward-dominant MOVE
-        // (see the ACTION_MOVE branch): that lands well before com.miui.home's
-        // "swipe up = HOME" threshold, so its animation is cancelled before committing
-        // while taps and pure up-swipes stay untouched.
+        // OWN THE DOWN INSIDE THE CONFLICT STRIP — unless the system_server arbiter has
+        // proven that MiuiHome's own "[Gesture Monitor] swipe-up" no longer receives corner
+        // DOWNs (LauncherMonitorRegion cuts the corner boxes out of its touchable region and
+        // publishes that proof through the shared remote preferences). With the proof, the
+        // launcher cannot recognise HOME there and cannot pilfer, so observing is enough and
+        // the app keeps its own DOWN; without it, owning the DOWN is the deterministic
+        // option (the launcher then skips its take-over: "on_pilfered_at_down ...").
+        arbiterProven = prefs.getLong(RemotePrefs.KEY_ARBITER_REGION, 0L) > 0L
         val bottom = displayBounds().bottom
         val inHomeBand = y >= bottom - HOME_GESTURE_BAND_DP * density
-        val owned = false
+        val owned = !arbiterProven && inHomeBand && pilferMonitor()
         logger(
             Log.INFO,
             "MON_DOWN side=$side x=$x y=$y box=${cornerBoxPx()} band=$inHomeBand " +
-                "mode=observe shadow=${shadowWorks?.toString() ?: "unknown"} " + boundsForLog(),
+                "mode=${if (owned) "pre-own" else "observe"} arbiter=$arbiterProven " +
+                "shadow=${shadowWorks?.toString() ?: "unknown"} " + boundsForLog(),
             null,
         )
         val config = AdaptiveSpyGestureConfig.create(
@@ -512,11 +495,25 @@ class CornerInputMonitor(
      * finger touch (FlymeFreeform commentary, CornerGestureEngine :104-112).
      */
     private fun sideFor(x: Float, y: Float): SpySide? {
-        val size = cornerBoxPx()
+        // COMPLETE QUARTER-DISC (sector) at each bottom corner — not a square, and not
+        // direction-gated: once the DOWN is inside the sector every direction belongs to the
+        // drawer, straight up included (user request: "完整扇形…即使上方也能" — a swipe up
+        // from the corner must open the panel, not go HOME). CornerZone.detectSide's shape,
+        // radius = the configured trigger range.
         val b = displayBounds()
-        if (y < b.bottom - size) return null
-        if (settings.left && x <= b.left + size) return SpySide.LEFT
-        if (settings.right && x >= b.right - size) return SpySide.RIGHT
+        val radius = cornerBoxPx()
+        val fromBottom = b.bottom - y
+        if (fromBottom < 0f || fromBottom > radius) return null
+        if (settings.left && x >= b.left &&
+            hypot(x - b.left, fromBottom) <= radius
+        ) {
+            return SpySide.LEFT
+        }
+        if (settings.right && x <= b.right &&
+            hypot(b.right - x, fromBottom) <= radius
+        ) {
+            return SpySide.RIGHT
+        }
         return null
     }
 
@@ -573,31 +570,6 @@ class CornerInputMonitor(
         }
     }
 
-    /**
-     * Replay the system's bottom up-swipe for a stroke we owned at DOWN but that was not
-     * the drawer. Mirrors EdgeBackGestureHandler's own synthesis for a back commit on
-     * this ROM — decompiled `m2197$$Nest$msendEvent` (:337-342) builds the KeyEvent pair
-     * and calls `InputManager.injectInputEvent(event, 0)` (0 = async). HOME is what
-     * HyperOS does with a swipe up from the bottom edge, so without this replay owning
-     * the corner box would silently break "swipe up from the bottom to go HOME" inside it.
-     */
-    private fun replayUpwardGesture() {
-        val method = injectInputEventMethod
-        if (method == null) {
-            logger(Log.WARN, "MON_UPWARD_REPLAY_UNAVAILABLE", null)
-            return
-        }
-        try {
-            val now = SystemClock.uptimeMillis()
-            for (action in intArrayOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
-                val key = KeyEvent(now, now, action, KeyEvent.KEYCODE_HOME, 0)
-                method.invoke(inputManager, key, 0)
-            }
-            logger(Log.INFO, "MON_UPWARD_REPLAY_HOME", null)
-        } catch (t: Throwable) {
-            logger(Log.WARN, "MON_UPWARD_REPLAY_FAILED", t)
-        }
-    }
 
     // ------------------------------------------------------------ transport B (fallback)
 
@@ -667,6 +639,7 @@ class CornerInputMonitor(
 
         var side: SpySide = SpySide.RIGHT
             private set
+
         var pointerId: Int = -1
             private set
         var tracking = false
@@ -686,20 +659,11 @@ class CornerInputMonitor(
         /** only ONE take-back attempt per stroke — never ping-pong with the launcher */
         var shadowAttempted = false
 
-        /** only one early claim attempt per stroke (a failed pilfer must not spam) */
-        var claimAttempted = false
-
         /** DOWN position, in raw display pixels (read by the early-claim test) */
         var originX = 0f
             private set
         var originY = 0f
             private set
-
-        /** the stroke moved like the system's bottom up-swipe, not like the drawer */
-        private var upwardIntent = false
-
-        /** the system up-swipe was already committed mid-gesture (never commit twice) */
-        private var upwardCommitted = false
 
         /** ACTION_DOWN uptime — the tap/short-gesture test at release */
         var downUptime = 0L
@@ -723,8 +687,6 @@ class CornerInputMonitor(
             claimed = false
             owned = newOwned
             pilferAttempted = false
-            upwardIntent = false
-            upwardCommitted = false
             downUptime = SystemClock.uptimeMillis()
             originX = x
             originY = y
@@ -735,32 +697,11 @@ class CornerInputMonitor(
         fun move(raw: MotionEvent, x: Float, y: Float) {
             if (!tracking) return
             val cfg = config ?: return
-            // While WE own the stream, a clearly upward stroke is the system's bottom
-            // up-swipe (HOME on this ROM), never the drawer: stop feeding the drawer
-            // engine and commit the system gesture. Mirrors MiuiHome's OWN home formula
-            // (its Rust strings: `formula=down_y-current_y>record_area_height_px`,
-            // ` Home gesture recognized, delay pilfer`), and — because the launcher
-            // commits as soon as the finger leaves its record area rather than on
-            // release — we commit at the same moment instead of waiting for UP.
-            if (owned && !claimed) {
-                val inward = if (side == SpySide.LEFT) x - originX else originX - x
-                val upward = originY - y
-                if (upward > cfg.upwardThreshold && upward >= 2f * inward) {
-                    if (!upwardIntent) {
-                        upwardIntent = true
-                        logger(
-                            Log.INFO,
-                            "MON_UPWARD_INTENT side=${side.name} inward=$inward upward=$upward",
-                            null,
-                        )
-                    }
-                    if (!upwardCommitted && upward >= homeCommitPx) {
-                        upwardCommitted = true
-                        replayUpwardGesture()
-                    }
-                    return
-                }
-            }
+            // The corner is a COMPLETE SECTOR: there is no upward hand-off to the system's
+            // bottom up-swipe any more (user request — a swipe straight up out of the corner
+            // opens the panel). Owning the DOWN in the strip (or the system_server arbiter
+            // keeping MiuiHome out of it) is what makes that safe; HOME stays reachable from
+            // the rest of the bottom edge, which the corner gate never admits.
             when (val action = engine.move(pointerId, raw.pointerCount, x, y, cfg)) {
                 is SpyAction.Activate -> {
                     if (!pilferAttempted && !owned) {
@@ -791,36 +732,24 @@ class CornerInputMonitor(
                 // forwarding window. NEVER force-retract here: the fan owns this decision.
                 forwardToFan(raw)
             } else if (owned) {
-                if (upwardIntent) {
-                    // Only if the mid-gesture commit above did not already fire, and only
-                    // when the finger is STILL above the origin — an upward start that
-                    // comes back down is a cancelled gesture, not a home swipe.
-                    val stillUp = config?.let { originY - y > it.upwardThreshold } ?: false
-                    if (!upwardCommitted && stillUp) {
-                        replayUpwardGesture()
-                    } else if (!upwardCommitted) {
-                        logger(Log.INFO, "MON_UPWARD_ABORTED", null)
-                    }
+                // Not the drawer and not a claimed swipe: the user TAPPED inside the corner
+                // sector, so the app never saw it (we owned the DOWN). MiuiHome answers a
+                // DOWN-time pilfer with its own delayed passthrough
+                // (`on_pilfered_at_down: passthrough_eligible = true`,
+                // `scheduled passthrough after 300ms`, `passthrough timeout fired,
+                // injecting tap x=`), so injecting unconditionally DOUBLE-TAPS — the window
+                // below waits past the launcher's whole 300 ms passthrough and only fills in
+                // when no injected tap ever showed up on our stream.
+                val moved = hypot(x - originX, y - originY)
+                val duration = SystemClock.uptimeMillis() - downUptime
+                if (moved <= tapSlopPx && duration <= TAP_MAX_MS) {
+                    scheduleTapPassthrough(x, y, downUptime)
                 } else {
-                    // Not the drawer and not the system up-swipe: if the user just TAPPED
-                    // inside the band, the app never saw it (we owned the DOWN). MiuiHome
-                    // answers a DOWN-time pilfer with its own delayed passthrough
-                    // (`on_pilfered_at_down: passthrough_eligible = true`,
-                    // `scheduled passthrough after 300ms`, `passthrough timeout fired,
-                    // injecting tap x=`), so injecting unconditionally DOUBLE-TAPS — the
-                    // window below waits past the launcher's whole 300 ms passthrough and
-                    // only fills in when no injected tap ever showed up on our stream.
-                    val moved = hypot(x - originX, y - originY)
-                    val duration = SystemClock.uptimeMillis() - downUptime
-                    if (moved <= tapSlopPx && duration <= TAP_MAX_MS) {
-                        scheduleTapPassthrough(x, y, downUptime)
-                    } else {
-                        logger(
-                            Log.INFO,
-                            "MON_SWALLOWED moved=${moved.toInt()} duration=$duration",
-                            null,
-                        )
-                    }
+                    logger(
+                        Log.INFO,
+                        "MON_SWALLOWED moved=${moved.toInt()} duration=$duration",
+                        null,
+                    )
                 }
             }
             engine.up(pointerId)
@@ -840,8 +769,6 @@ class CornerInputMonitor(
             tracking = false
             claimed = false
             owned = false
-            upwardIntent = false
-            upwardCommitted = false
             pilferAttempted = false
             pointerId = -1
             config = null
@@ -1277,23 +1204,6 @@ class CornerInputMonitor(
         /** how long the stream must continue after a re-pilfer to count as working */
         const val SHADOW_CONFIRM_MS = 200L
 
-        /**
-         * Inward travel (dp) that claims a stroke while the finger is still moving mostly
-         * sideways. Chosen so the claim lands long before com.miui.home's upward
-         * "record area" HOME threshold is reached (its own formula is
-         * down_y - current_y > record_area_height_px), which is what stops the fan and the
-         * home animation from firing together; 4 dp is also above any tap wobble, so taps
-         * in the corner stay with the app.
-         */
-        const val EARLY_CLAIM_DP = 4f
-
-        /**
-         * How much steeper than "45°" a stroke may climb and still be claimed as a drawer:
-         * the claim fires while `inward * EARLY_CLAIM_RATIO >= upward`. A real bottom
-         * up-swipe climbs far faster than this and is therefore never claimed, so HOME
-         * keeps working from every x, corners included.
-         */
-        const val EARLY_CLAIM_RATIO = 1.5f
 
         /** Grace after a corner stroke ends during which the native back handler's late
          *  commit attempt for the SAME stroke is still suppressed (main-looper dispatch

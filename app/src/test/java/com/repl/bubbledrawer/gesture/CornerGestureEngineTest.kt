@@ -6,10 +6,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Checks of the corner claim thresholds — the reference CornerGestureEngine
- * :70-74 gates (inward max(1.75·slop, 14dp), upward max(0.5·slop, 4dp),
- * reverse max(slop, 8dp)). DOWN arming is unconditional at the engine level;
- * the SPY view gates the touch to the corner box (rounded-corner fix).
+ * Checks of the corner sector claim rule. The claim is RADIAL
+ * (`hypot(inward, upward) >= max(1.75·slop, 14dp)`) and deliberately
+ * direction-agnostic: a stroke that starts inside the corner sector belongs to the
+ * drawer in every direction, straight up included (user request "完整扇形…即使上方也能"),
+ * so the reference's old inward+upward pair and its vertical-dominance hand-off to the
+ * system's HOME are both gone. Only a retreat back over the edge cancels.
  */
 class CornerGestureEngineTest {
 
@@ -19,10 +21,10 @@ class CornerGestureEngineTest {
         touchSlop = 20f, density = density,
         triggerRangeDp = 96, leftEnabled = true, rightEnabled = true,
     )
-    // thresholds with slop=20, d=3: inward=42, upward=12, reverse=24, radius=288
+    // thresholds with slop=20, d=3: radial=42, reverse=24, radius=288
 
     private fun leftDown(e: CornerGestureEngine) =
-        e.down(0, 20f, 2380f, SpySide.LEFT) // box gate done by the view
+        e.down(0, 20f, 2380f, SpySide.LEFT) // sector gate done by the monitor
 
     @Test fun downArmsLeft() {
         val e = CornerGestureEngine()
@@ -33,23 +35,32 @@ class CornerGestureEngineTest {
     @Test fun smallMoveStaysUnclaimed() {
         val e = CornerGestureEngine()
         leftDown(e)
-        assertEquals(SpyAction.PassThrough, e.move(0, 1, 25f, 2380f, config)) // inward 5 < 42
+        assertEquals(SpyAction.PassThrough, e.move(0, 1, 25f, 2380f, config)) // travel 5 < 42
         assertFalse(e.isClaimed)
     }
 
-    @Test fun inwardWithoutUpwardDoesNotClaim() {
+    @Test fun inwardOnlyClaims() {
         val e = CornerGestureEngine()
         leftDown(e)
-        assertEquals(SpyAction.PassThrough, e.move(0, 1, 20f + 44f, 2380f - 4f, config)) // upward 4 < 12
-        assertFalse(e.isClaimed)
+        // 44 px inward, no upward component: still the drawer (radial rule)
+        assertTrue(e.move(0, 1, 20f + 44f, 2380f, config) is SpyAction.Activate)
+        assertTrue(e.isClaimed)
     }
 
-    @Test fun inwardAndUpwardClaim() {
+    @Test fun upwardOnlyClaims() {
         val e = CornerGestureEngine()
         leftDown(e)
-        val a = e.move(0, 1, 20f + 44f, 2380f - 13f, config)
+        // straight UP out of the corner: the drawer, not the system's HOME
+        val a = e.move(0, 1, 20f, 2380f - 44f, config)
         assertTrue(a is SpyAction.Activate)
         assertEquals(SpySide.LEFT, (a as SpyAction.Activate).side)
+        assertTrue(e.isClaimed)
+    }
+
+    @Test fun diagonalClaims() {
+        val e = CornerGestureEngine()
+        leftDown(e)
+        assertTrue(e.move(0, 1, 20f + 44f, 2380f - 13f, config) is SpyAction.Activate)
         assertTrue(e.isClaimed)
     }
 

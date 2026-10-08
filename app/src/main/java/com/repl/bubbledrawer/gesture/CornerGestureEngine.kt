@@ -125,18 +125,17 @@ class CornerGestureEngine {
         if (pointerId != this.pointerId || pointerCount != 1) return cancel()
         val inward = if (activeSide == SpySide.LEFT) x - originX else originX - x
         val upward = originY - y
-        if (inward < -config.reverseTolerance || upward < -config.reverseTolerance) return cancel()
+        // Only a RETREAT (the finger leaving the screen interior, back over the edge) cancels
+        // before the claim. Everything else inside the corner sector counts, in ANY direction:
+        // the previous vertical-dominance rule ("upward >= 2x inward = the system's BACK/HOME,
+        // leave it alone") is deliberately gone — a swipe straight up out of the corner now
+        // opens the panel (user request), and HOME stays reachable from the rest of the bottom
+        // edge because the corner gate only admits the sector.
+        if (inward < -config.reverseTolerance) return cancel()
         if (!isClaimed) {
-            // Xiaomi/HyperOS arbitration: a clearly VERTICAL-dominant swipe from the
-            // corner is a plain BACK, not the drawer, so stop tracking it as early as
-            // possible and leave the stream entirely alone (nothing has been pilfered
-            // at this point). Mirrors MiuiBackGestureHook's horizontal-intent gate
-            // (`outward >= abs(vertical)/2`, SystemUiInputRuntime.hasXiaomiBackIntent
-            // :78-82), inverted: upward ≥ 2×inward past the inward threshold = vertical.
-            if (upward > config.inwardThreshold && upward >= 2f * inward) return cancel()
-            if (inward < config.inwardThreshold || upward < config.upwardThreshold) {
-                return SpyAction.PassThrough
-            }
+            // Radial travel, not an inward+upward pair: the sector is direction-agnostic.
+            val travel = hypot(inward.toDouble(), upward.toDouble()).toFloat()
+            if (travel < config.inwardThreshold) return SpyAction.PassThrough
             isClaimed = true
             phase = SpyPhase.REVEALING
             return SpyAction.Activate(activeSide, originX, originY, x, y)

@@ -23,17 +23,21 @@ class ModuleMain : XposedModule() {
 
     override fun onModuleLoaded(param: XposedModuleInterface.ModuleLoadedParam) {
         processName = param.processName
-        if (param.processName != PROCESS_SYSTEM_UI && param.processName != PROCESS_LAUNCHER) {
+        if (param.processName != PROCESS_SYSTEM_UI &&
+            param.processName != PROCESS_LAUNCHER &&
+            param.processName != PROCESS_SYSTEM &&
+            param.processName != PROCESS_SYSTEM_ALT
+        ) {
             log(Log.WARN, TAG, "MODULE_SKIPPED_UNEXPECTED_PROCESS")
             return
         }
         // Exempt the @hide input classes the corner transport reflects into / links
         // against directly (android.view.InputMonitor + InputChannel +
-        // InputEventReceiver, android.hardware.input.InputManagerGlobal). Prefixes
-        // follow AndroidHiddenApiBypass.setHiddenApiExemptions' "L<fqcn>;" signature
-        // form (Helper.java). MUST run before any of those classes is resolved — the
-        // module only touches them later, in onPackageReady. The launcher process needs
-        // them too: its probe resolves the very same hidden methods to hook them.
+        // InputEventReceiver, android.hardware.input.InputManagerGlobal), plus what the
+        // system_server arbiter touches (InputManagerService internals, InputWindowHandle,
+        // SurfaceControl.Transaction.setInputWindowInfo). Prefixes follow
+        // AndroidHiddenApiBypass.setHiddenApiExemptions' "L<fqcn>;" signature form
+        // (Helper.java). MUST run before any of those classes is resolved.
         val exempted = runCatching {
             org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions(
                 "Landroid/view/InputMonitor;",
@@ -42,11 +46,15 @@ class ModuleMain : XposedModule() {
                 "Landroid/view/InputEvent;",
                 "Landroid/hardware/input/InputManagerGlobal;",
                 "Landroid/hardware/input/InputManager;",
+                "Landroid/view/InputWindowHandle;",
+                "Lcom/android/server/input/InputManagerService;",
             )
         }.getOrDefault(false)
         log(if (exempted) Log.INFO else Log.WARN, TAG, "HIDDEN_API_EXEMPT=$exempted")
         if (param.processName == PROCESS_LAUNCHER) {
-            // The launcher probe needs no configuration: it is read-only.
+            // The launcher probe needs no configuration: it is read-only, and on Android 17
+            // this branch is in fact unreachable (MiuiHome is forked by Xiaomi's own
+            // hyos_spawner, not the ART zygote, so no LSPosed Java hook enters it).
             log(Log.INFO, TAG, "MODULE_LAUNCHER_PROCESS_READY")
             return
         }
@@ -66,6 +74,28 @@ class ModuleMain : XposedModule() {
         } catch (exception: RuntimeException) {
             disableForConfigurationFailure("MODULE_CONFIG_FAILURE", exception)
         }
+    }
+
+    /**
+     * System server (process name "system"/"android") — the launcher-side arbiter lives here.
+     * This is the API-102 entry that actually fires for system_server (see the reference's
+     * HotReloadHookRuntime.java:1288-1293, which uses the same callback for its
+     * `installSystemServerHooks(...)`).
+     */
+    override fun onSystemServerStarting(param: XposedModuleInterface.SystemServerStartingParam) {
+        processName = PROCESS_SYSTEM
+        runCatching {
+            org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions(
+                "Landroid/view/InputWindowHandle;",
+                "Lcom/android/server/input/InputManagerService;",
+            )
+        }
+        log(Log.INFO, TAG, "SYSTEM_SERVER_ARBITER_INSTALLING loader=${param.classLoader}")
+        runCatching {
+            LauncherMonitorRegion(this) { priority, message, error ->
+                log(priority, TAG, message, error)
+            }.install(param.classLoader)
+        }.onFailure { log(Log.WARN, TAG, "ARBITER_INSTALL_FAILED", it) }
     }
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
@@ -101,5 +131,9 @@ class ModuleMain : XposedModule() {
         const val TAG = "BubbleDrawer"
         const val PROCESS_SYSTEM_UI = "com.android.systemui"
         const val PROCESS_LAUNCHER = "com.miui.home"
+
+        /** system_server reports itself as "system" in this API and "android" in others. */
+        const val PROCESS_SYSTEM = "system"
+        const val PROCESS_SYSTEM_ALT = "android"
     }
 }
