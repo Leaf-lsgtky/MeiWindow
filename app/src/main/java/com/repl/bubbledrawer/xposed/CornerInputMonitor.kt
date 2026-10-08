@@ -17,6 +17,7 @@ import android.view.InputDevice
 import android.view.InputEvent
 import android.view.InputEventReceiver
 import android.view.InputMonitor
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -108,6 +109,15 @@ class CornerInputMonitor(
     }.getOrNull()
     private val pilferPointersMethod: Method =
         InputManager::class.java.getDeclaredMethod("pilferPointers", IBinder::class.java)
+
+    /** InputManager.injectInputEvent(InputEvent, int) — @hide, INJECT_EVENTS (SystemUI holds it). */
+    private val injectInputEventMethod: Method? = runCatching {
+        InputManager::class.java.getMethod(
+            "injectInputEvent",
+            android.view.InputEvent::class.java,
+            Int::class.javaPrimitiveType,
+        )
+    }.getOrNull()
 
     private var settings = RemotePrefs.read(prefs)
     private var fan: FanHost? = null
@@ -288,7 +298,14 @@ class CornerInputMonitor(
 
             MotionEvent.ACTION_POINTER_DOWN -> stroke?.cancel() // second finger = never the drawer
 
-            MotionEvent.ACTION_UP -> stroke?.up(ev)
+            MotionEvent.ACTION_UP -> stroke?.let { s ->
+                val index = ev.findPointerIndex(s.pointerId)
+                if (index >= 0) {
+                    s.up(ev, ev.getRawX(index), ev.getRawY(index))
+                } else {
+                    s.up(ev, ev.rawX, ev.rawY)
+                }
+            }
 
             MotionEvent.ACTION_CANCEL -> {
                 logger(
@@ -320,6 +337,33 @@ class CornerInputMonitor(
             }
             return
         }
+        // OWN THE DOWN *INSIDE THE SYSTEM'S BOTTOM GESTURE BAND*, observe-only above it.
+        //
+        // Device evidence (2026-10-08, module log): two corner strokes 3 s apart —
+        // (1126,2588) claimed fine, (1121,2618) got MON_SYSTEM_CANCEL 8 ms after DOWN —
+        // and "works if I swipe fast enough". Sorting EVERY stroke in the log by height
+        // above the bottom edge gives a clean split: all 14 cancels start ≤70 px (21 dp)
+        // up, the strokes that survived start ≥77 px (24 dp) up *or* were fast enough to
+        // pilfer first. That is the system's reserved bottom band (swipe up = HOME, the
+        // same region AOSP's EdgeBackGestureHandler excludes via back_gesture_bottom_height):
+        // something outside SystemUI takes the touch over there, and the take-over only
+        // succeeds while the APP still owns the gesture — after our own pilfer no cancel
+        // ever arrived, which is why a fast swipe used to win.
+        //
+        // So we take the stream at ACTION_DOWN only inside that band, which is exactly
+        // where the user's corner swipes start, and leave everything above it as the
+        // pass-through observer it already was (taps and app drags there are untouched).
+        // Outside the module log's scope this degrades to "works whenever the take-over
+        // does not fire", never to "never fires".
+        val bottom = displayBounds().bottom
+        val inHomeBand = y >= bottom - HOME_GESTURE_BAND_DP * density
+        val owned = inHomeBand && pilferMonitor()
+        logger(
+            Log.INFO,
+            "MON_DOWN side=$side x=$x y=$y box=${cornerBoxPx()} band=$inHomeBand owned=$owned " +
+                boundsForLog(),
+            null,
+        )
         val config = AdaptiveSpyGestureConfig.create(
             displayWidth = screenW().toFloat(),
             displayHeight = screenH().toFloat(),
@@ -330,13 +374,8 @@ class CornerInputMonitor(
             rightEnabled = settings.right,
         )
         val s = Stroke({ claimed -> logger(Log.INFO, "MON_PILFER_OK=$claimed", null) })
-        s.arm(ev.getPointerId(0), x, y, side, config)
+        s.arm(ev.getPointerId(0), x, y, side, config, owned)
         stroke = s
-        logger(
-            Log.INFO,
-            "MON_DOWN side=$side x=$x y=$y box=${cornerBoxPx()} ${boundsForLog()}",
-            null,
-        )
     }
 
     /**
@@ -407,6 +446,32 @@ class CornerInputMonitor(
         }
     }
 
+    /**
+     * Replay the system's bottom up-swipe for a stroke we owned at DOWN but that was not
+     * the drawer. Mirrors EdgeBackGestureHandler's own synthesis for a back commit on
+     * this ROM — decompiled `m2197$$Nest$msendEvent` (:337-342) builds the KeyEvent pair
+     * and calls `InputManager.injectInputEvent(event, 0)` (0 = async). HOME is what
+     * HyperOS does with a swipe up from the bottom edge, so without this replay owning
+     * the corner box would silently break "swipe up from the bottom to go HOME" inside it.
+     */
+    private fun replayUpwardGesture() {
+        val method = injectInputEventMethod
+        if (method == null) {
+            logger(Log.WARN, "MON_UPWARD_REPLAY_UNAVAILABLE", null)
+            return
+        }
+        try {
+            val now = SystemClock.uptimeMillis()
+            for (action in intArrayOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+                val key = KeyEvent(now, now, action, KeyEvent.KEYCODE_HOME, 0)
+                method.invoke(inputManager, key, 0)
+            }
+            logger(Log.INFO, "MON_UPWARD_REPLAY_HOME", null)
+        } catch (t: Throwable) {
+            logger(Log.WARN, "MON_UPWARD_REPLAY_FAILED", t)
+        }
+    }
+
     // ------------------------------------------------------------ transport B (fallback)
 
     private fun updateSide(side: SpySide, shouldExist: Boolean) {
@@ -458,19 +523,22 @@ class CornerInputMonitor(
     // ------------------------------------------------------------ shared stroke logic
 
     /**
-     * One observed stroke. `CornerGestureEngine` arms on DOWN (nothing is stolen), and
-     * `Activate` on a MOVE is the ONLY moment the stream is pilfered — after that every
-     * event is forwarded to the fan as one continuous sequence, so the release always
-     * arrives (reference CornerGestureEngine :113-147).
-     *
-     * `pilfer` reports it back to the caller for tracing; a claimed stroke always ends
-     * through [retractFan] so the panel can never be left hanging (the reference's
-     * two-window hand-off lost exactly that).
+     * One stroke. Above the system's bottom band nothing is taken at DOWN: the engine
+     * arms as a pure observer and `Activate` on a MOVE is the only moment the stream is
+     * pilfered. INSIDE the band the stream is already ours from DOWN (`owned`, see
+     * [beginMonitorStroke]) because an outside take-over would otherwise win the ~8 ms
+     * race. Either way a claimed stroke ends through [retractFan], and one we owned but
+     * never claimed replays the system's bottom up-swipe, so the panel is never left
+     * hanging and "swipe up from the bottom to go HOME" keeps working
+     * (reference CornerGestureEngine :113-147; the reference's two-window hand-off lost
+     * exactly that release).
      */
     private inner class Stroke(private val pilfered: (Boolean) -> Unit) {
         private val engine = CornerGestureEngine()
         private var config: SpyGestureConfig? = null
         private var pilferAttempted = false
+        private var originX = 0f
+        private var originY = 0f
 
         var side: SpySide = SpySide.RIGHT
             private set
@@ -481,16 +549,34 @@ class CornerInputMonitor(
         var claimed = false
             private set
 
+        /** the stream became ours at ACTION_DOWN (see beginMonitorStroke) */
+        var owned = false
+            private set
+
+        /** the stroke moved like the system's bottom up-swipe, not like the drawer */
+        private var upwardIntent = false
+
         /** uptime of the last CLAIMED stroke end (0 = never) — read by [isCornerCommitWindow]. */
         var lastClaimedEndUptime: Long = 0L
             private set
 
-        fun arm(newPointerId: Int, x: Float, y: Float, newSide: SpySide, newConfig: SpyGestureConfig) {
+        fun arm(
+            newPointerId: Int,
+            x: Float,
+            y: Float,
+            newSide: SpySide,
+            newConfig: SpyGestureConfig,
+            newOwned: Boolean,
+        ) {
             pointerId = newPointerId
             side = newSide
             config = newConfig
             claimed = false
+            owned = newOwned
             pilferAttempted = false
+            upwardIntent = false
+            originX = x
+            originY = y
             engine.down(newPointerId, x, y, newSide)
             tracking = engine.phase == SpyPhase.ARMED
         }
@@ -498,9 +584,29 @@ class CornerInputMonitor(
         fun move(raw: MotionEvent, x: Float, y: Float) {
             if (!tracking) return
             val cfg = config ?: return
+            // While WE own the stream, a clearly upward stroke is the system's bottom
+            // up-swipe (HOME on this ROM), never the drawer: stop feeding the drawer
+            // engine and remember the intent for UP, where it gets replayed to the
+            // system. Mirrors MiuiBackGestureHook's non-terminal intent gate
+            // (hasXiaomiBackIntent :78-82) and the engine's own vertical rule.
+            if (owned && !claimed) {
+                val inward = if (side == SpySide.LEFT) x - originX else originX - x
+                val upward = originY - y
+                if (upward > cfg.upwardThreshold && upward >= 2f * inward) {
+                    if (!upwardIntent) {
+                        upwardIntent = true
+                        logger(
+                            Log.INFO,
+                            "MON_UPWARD_INTENT side=${side.name} inward=$inward upward=$upward",
+                            null,
+                        )
+                    }
+                    return
+                }
+            }
             when (val action = engine.move(pointerId, raw.pointerCount, x, y, cfg)) {
                 is SpyAction.Activate -> {
-                    if (!pilferAttempted) {
+                    if (!pilferAttempted && !owned) {
                         pilferAttempted = true
                         pilfered(pilferMonitor())
                     }
@@ -520,13 +626,21 @@ class CornerInputMonitor(
             }
         }
 
-        fun up(raw: MotionEvent) {
+        fun up(raw: MotionEvent, x: Float, y: Float) {
             if (!tracking) return
             if (claimed) {
                 // The release goes to the fan so GestureAppLauncher decides launch /
                 // stay-open / collapse (m9729p :531-556), exactly like the original
                 // forwarding window. NEVER force-retract here: the fan owns this decision.
                 forwardToFan(raw)
+            } else if (upwardIntent && owned) {
+                // We owned the DOWN, so the system never saw this stroke: replay the
+                // gesture the user actually made, or owning the corner would break
+                // "swipe up from the bottom to go HOME". Only when the finger is STILL
+                // above the origin at release — an upward start that comes back down is
+                // a cancelled gesture, not a home swipe.
+                val stillUp = config?.let { originY - y > it.upwardThreshold } ?: false
+                if (stillUp) replayUpwardGesture() else logger(Log.INFO, "MON_UPWARD_ABORTED", null)
             }
             engine.up(pointerId)
             end(retract = false)
@@ -541,12 +655,15 @@ class CornerInputMonitor(
 
         private fun end(retract: Boolean) {
             val wasClaimed = claimed
+            val wasOwned = owned
             tracking = false
             claimed = false
+            owned = false
+            upwardIntent = false
             pilferAttempted = false
             pointerId = -1
             config = null
-            if (wasClaimed) lastClaimedEndUptime = SystemClock.uptimeMillis()
+            if (wasClaimed || wasOwned) lastClaimedEndUptime = SystemClock.uptimeMillis()
             if (retract) retractFan()
         }
     }
@@ -586,7 +703,11 @@ class CornerInputMonitor(
      */
     fun isCornerCommitWindow(): Boolean {
         val s = stroke
-        if (s != null && ((s.tracking && s.claimed) || withinGrace(s.lastClaimedEndUptime))) return true
+        if (s != null &&
+            ((s.tracking && (s.claimed || s.owned)) || withinGrace(s.lastClaimedEndUptime))
+        ) {
+            return true
+        }
         return bindings.values.any { b ->
             val v = b.view
             (v.streamActive && v.claimActive) || withinGrace(v.lastClaimedEndUptime)
@@ -596,8 +717,7 @@ class CornerInputMonitor(
     private fun withinGrace(uptime: Long): Boolean =
         uptime != 0L && SystemClock.uptimeMillis() - uptime <= COMMIT_GRACE_MS
 
-    /** SystemUiCornerInputMonitor.pilferPointers (:170-184) verbatim flow (fallback transport). */
-    private fun pilferView(view: View): Boolean = try {
+    /** SystemUiCornerInputMonitor.pilferPointers (:170-184) verbatim flow (fallback transport). */    private fun pilferView(view: View): Boolean = try {
         val viewRoot = getViewRootImplMethod.invoke(view) ?: return false
         val getToken = getInputTokenMethod ?: return false
         val inputToken = getToken.invoke(viewRoot) as? IBinder ?: return false
@@ -870,6 +990,15 @@ class CornerInputMonitor(
          *  "[Gesture Monitor] BubbleDrawer-corner". */
         const val MONITOR_NAME = "BubbleDrawer-corner"
         const val DISPLAY_ID = 0
+
+        /**
+         * Height of the system's reserved bottom band inside which we OWN the DOWN.
+         * Measured on this device: every timely-cancelled corner stroke started ≤70 px
+         * (21 dp) above the bottom edge, every stroke that survived started ≥77 px
+         * (24 dp) up (or pilfered first). 28 dp keeps the whole observed band owned with
+         * a small margin; everything above it stays a pure observer.
+         */
+        const val HOME_GESTURE_BAND_DP = 28f
 
         /** Grace after a corner stroke ends during which the native back handler's late
          *  commit attempt for the SAME stroke is still suppressed (main-looper dispatch
