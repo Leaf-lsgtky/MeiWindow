@@ -110,14 +110,38 @@ SPY_RIGHT_SYSTEM_CANCEL tracking=true claimed=false                 (+9 ms)
 
 **运行时确认（一次即可）**：
 
+模块现在把 **`com.miui.home` 也放进了 LSPosed 作用域**（`META-INF/xposed/scope.list`），
+并在**桌面进程内**装了一个**只读探针**（`xposed/LauncherInputObserver.kt`）：它在桌面进程里
+hook 框架输入 API（`InputMonitor.pilferPointers` / `InputManagerGlobal.pilferPointers(IBinder)` /
+`cancelCurrentTouch` / `InputManager.injectInputEvent` / `monitorGestureInput` /
+MIUI 的 `updateInputMonitor*`），**只记日志、随后 `proceed()`，绝不改行为**（在桌面进程里
+写错会造成桌面崩溃循环，比抽屉不优雅严重得多）。
+
+这一步是关键分叉点：桌面用 JNI 调**框架 Java 方法**时，代码跑在**桌面进程内**，
+于是能用纯 Java hook 拦（可做优雅方案）；如果这些日志**一条都不出现**，说明桌面走的是
+**原生 AIDL/binder** 直连，那就必须像 MiuiHome 手势 hook 项目那样做原生内联 hook
+（该项目的 `miui-home-hyos-native/` 里有完整体系：`miui_home_native_hook.cpp`(242KB)、
+`input_monitor_pilfer_hook.S`、Dart/运行时解析器、`native_init.list` 入口与
+`safe_lsposed_native_deploy.py` 部署脚本——是一个成熟但体量很大的系统）。
+
+日志判据：
+
+| 日志 | 含义 |
+|---|---|
+| `LAUNCHER_MONITOR_PILFER` / `LAUNCHER_TOKEN_PILFER` | 桌面用 Java pilfer 抢流 → **可纯 Java 拦** |
+| `LAUNCHER_CANCEL_CURRENT_TOUCH` | 桌面直接取消整笔触摸 |
+| `LAUNCHER_INJECT_INPUT_EVENT action=… x=… y=…` | 桌面自己的 tap 透传补发（判定"双击"问题） |
+| `LAUNCHER_MONITOR_CREATE name=swipe-up` | 确认那条 spy 监视器就是它建的 |
+| 一条都没有 | 走原生路径 → 需要原生内联 hook 体系 |
+
+也可以直接用 logcat / ftrace 从系统侧确认：
+
 ```powershell
-# 一边录日志一边做一次角滑
 adb logcat -v time | Select-String -Pattern 'GestureInputMonitor|pilfer|redirecting|passthrough|GestureStub'
-# 或者只看 binder：先开 ftrace，再做手势，然后读 trace
+# 或抓 binder 事务（input 服务）：63=pilferPointers 57=cancelCurrentTouch
 adb shell su -c "echo 1 > /sys/kernel/tracing/events/binder/binder_transaction/enable; echo 1 > /sys/kernel/tracing/tracing_on"
-#   ... 做一次右下角斜滑 ...
-adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracing/trace" |
-  Select-String -Pattern 'code=0x3f|code=0x39|code=0x2d'   # 63=pilferPointers 57=cancelCurrentTouch 45=?
+#   …做一次右下角斜滑…
+adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracing/trace"
 ```
 
 即**系统为"底边上滑 = 回桌面"预留的那条带子里，有 SystemUI 之外的进程在 DOWN 后
@@ -131,9 +155,10 @@ adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracin
   `KEYCODE_HOME`（不再等松手），日志 `MON_UPWARD_REPLAY_HOME`；
   （若你想改成补发 BACK 而不是 HOME，改一处常量即可。）
 - 带内被拿下、最后判定为**轻点**（位移 ≤ 1.5×slop、时长 ≤ 250ms）时补注入一个 tap
-  还给应用：先等过桌面自己的 300ms 透传窗口，并在自己的监视器流里观察是否出现
-  它注入的 tap（注入事件 `deviceId = -1`），只有它没补才由我们补
-  （`MON_TAP_PASSTHROUGH_DELEGATED` / `MON_TAP_PASSTHROUGH_INJECTED`），因此不会双触发。
+  还给应用：**先等 700ms**（桌面自己的透传是 `scheduled passthrough after 300ms`，留足抖动余量），
+  并在自己的监视器流里检查**从 DOWN 起**是否出现过任何外部注入事件（注入事件 `deviceId = -1`），
+  **只有它没补才由我们补**（`MON_TAP_PASSTHROUGH_DELEGATED` / `MON_TAP_PASSTHROUGH_INJECTED`）。
+  这样即使桌面也补发了 tap，也只会触发一次——即"点击可能触发两次"的修法。
 
 
 ## 结构

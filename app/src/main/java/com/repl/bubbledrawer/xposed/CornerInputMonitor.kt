@@ -685,13 +685,14 @@ class CornerInputMonitor(
                     // inside the band, the app never saw it (we owned the DOWN). MiuiHome
                     // answers a DOWN-time pilfer with its own delayed passthrough
                     // (`on_pilfered_at_down: passthrough_eligible = true`,
-                    // `scheduled passthrough after 300ms`, `injecting tap x=`), so wait
-                    // past that window, watch for its injected tap on our own monitor
-                    // stream, and only inject one ourselves when it did not arrive.
+                    // `scheduled passthrough after 300ms`, `passthrough timeout fired,
+                    // injecting tap x=`), so injecting unconditionally DOUBLE-TAPS — the
+                    // window below waits past the launcher's whole 300 ms passthrough and
+                    // only fills in when no injected tap ever showed up on our stream.
                     val moved = hypot(x - originX, y - originY)
                     val duration = SystemClock.uptimeMillis() - downUptime
                     if (moved <= tapSlopPx && duration <= TAP_MAX_MS) {
-                        scheduleTapPassthrough(x, y)
+                        scheduleTapPassthrough(x, y, downUptime)
                     } else {
                         logger(
                             Log.INFO,
@@ -740,10 +741,9 @@ class CornerInputMonitor(
      * (which keeps receiving every event) watches for its injected tap (injected events
      * arrive with deviceId -1); only when none showed up do we inject one ourselves.
      */
-    private fun scheduleTapPassthrough(x: Float, y: Float) {
-        val mark = SystemClock.uptimeMillis()
+    private fun scheduleTapPassthrough(x: Float, y: Float, sinceUptime: Long) {
         mainHandler.postDelayed({
-            if (lastForeignInjectedUptime > mark) {
+            if (lastForeignInjectedUptime > sinceUptime) {
                 logger(Log.INFO, "MON_TAP_PASSTHROUGH_DELEGATED", null)
             } else {
                 injectTap(x, y)
@@ -1112,8 +1112,13 @@ class CornerInputMonitor(
         /** a stroke shorter than this that barely moved counts as a tap */
         const val TAP_MAX_MS = 250L
 
-        /** wait past MiuiHome's own 300 ms passthrough before injecting our own tap */
-        const val TAP_PASSTHROUGH_DELAY_MS = 350L
+        /**
+         * Wait past MiuiHome's own 300 ms tap passthrough before considering our own.
+         * 700 ms also absorbs its scheduling jitter, and the check is made against the
+         * DOWN time (not the release), so ANY injected event during the whole stroke
+         * counts as "the launcher is handling this tap" — the double-tap guard.
+         */
+        const val TAP_PASSTHROUGH_DELAY_MS = 700L
 
         /** window in which an injected event is assumed to be our own */
         const val OWN_INJECT_GUARD_MS = 200L

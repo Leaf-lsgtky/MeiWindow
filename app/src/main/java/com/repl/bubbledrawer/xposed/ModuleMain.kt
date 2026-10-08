@@ -10,7 +10,10 @@ import io.github.libxposed.api.XposedModuleInterface
  * libxposed API 102 module entry — structure mirrors the FlymeFreeform reference
  * (ModuleMain.kt:15-110): remote preferences at load time, per-package hook
  * install at package ready, hot reload rejected.
- * Scope (META-INF/xposed/scope.list): com.android.systemui only.
+ *
+ * Scope (META-INF/xposed/scope.list): com.android.systemui + com.miui.home.
+ * The launcher is in scope because the corner stroke's counterparty lives there
+ * (see LauncherInputObserver); it gets a read-only probe, never a behaviour change.
  */
 class ModuleMain : XposedModule() {
 
@@ -20,7 +23,7 @@ class ModuleMain : XposedModule() {
 
     override fun onModuleLoaded(param: XposedModuleInterface.ModuleLoadedParam) {
         processName = param.processName
-        if (param.processName != PROCESS_SYSTEM_UI) {
+        if (param.processName != PROCESS_SYSTEM_UI && param.processName != PROCESS_LAUNCHER) {
             log(Log.WARN, TAG, "MODULE_SKIPPED_UNEXPECTED_PROCESS")
             return
         }
@@ -29,7 +32,8 @@ class ModuleMain : XposedModule() {
         // InputEventReceiver, android.hardware.input.InputManagerGlobal). Prefixes
         // follow AndroidHiddenApiBypass.setHiddenApiExemptions' "L<fqcn>;" signature
         // form (Helper.java). MUST run before any of those classes is resolved — the
-        // module only touches them later, in onPackageReady.
+        // module only touches them later, in onPackageReady. The launcher process needs
+        // them too: its probe resolves the very same hidden methods to hook them.
         val exempted = runCatching {
             org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions(
                 "Landroid/view/InputMonitor;",
@@ -41,6 +45,11 @@ class ModuleMain : XposedModule() {
             )
         }.getOrDefault(false)
         log(if (exempted) Log.INFO else Log.WARN, TAG, "HIDDEN_API_EXEMPT=$exempted")
+        if (param.processName == PROCESS_LAUNCHER) {
+            // The launcher probe needs no configuration: it is read-only.
+            log(Log.INFO, TAG, "MODULE_LAUNCHER_PROCESS_READY")
+            return
+        }
         val properties = getFrameworkProperties()
         if (properties and XposedInterface.PROP_CAP_REMOTE == 0L) {
             log(Log.WARN, TAG, "MODULE_CONFIG_REMOTE_UNAVAILABLE")
@@ -60,8 +69,18 @@ class ModuleMain : XposedModule() {
     }
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
-        val prefs = configuration ?: return
         if (hooksInstalled) return
+        if (processName == PROCESS_LAUNCHER && param.packageName == PROCESS_LAUNCHER) {
+            hooksInstalled = true
+            // Read-only: must never be able to take the launcher down.
+            runCatching {
+                LauncherInputObserver(this) { priority, message, error ->
+                    log(priority, TAG, message, error)
+                }.install(param.classLoader)
+            }.onFailure { log(Log.WARN, TAG, "LAUNCHER_OBSERVER_INSTALL_FAILED", it) }
+            return
+        }
+        val prefs = configuration ?: return
         if (processName == PROCESS_SYSTEM_UI && param.packageName == PROCESS_SYSTEM_UI) {
             hooksInstalled = true
             SystemUiHookInstaller(this, prefs).install(param.classLoader)
@@ -81,5 +100,6 @@ class ModuleMain : XposedModule() {
     private companion object {
         const val TAG = "BubbleDrawer"
         const val PROCESS_SYSTEM_UI = "com.android.systemui"
+        const val PROCESS_LAUNCHER = "com.miui.home"
     }
 }
