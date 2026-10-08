@@ -134,6 +134,53 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
+        // 更多面板（方案 B overlay）外观：长 / 宽 / 图标 / 文字。面板始终居中，
+        // 长宽是"占屏幕的百分比"（0 = 默认 62 %），不是相对当前小窗的缩放。
+        add(TextView(this).apply { setText(R.string.panel_section_title) })
+        add(TextView(this).apply {
+            setText(getString(R.string.panel_width) + "：" + pctLabel(snap.panelWidthPct))
+        })
+        add(SeekBar(this).apply {
+            max = PANEL_PCT_MAX - PANEL_PCT_MIN + 1
+            progress = if (snap.panelWidthPct == 0) 0 else snap.panelWidthPct - PANEL_PCT_MIN + 1
+            onSeek { set ->
+                SettingsStore.setPanelWidthPct(this@MainActivity, if (set == 0) 0 else set + PANEL_PCT_MIN - 1)
+                recreate()
+            }
+        })
+        add(TextView(this).apply {
+            setText(getString(R.string.panel_height) + "：" + pctLabel(snap.panelHeightPct))
+        })
+        add(SeekBar(this).apply {
+            max = PANEL_PCT_MAX - PANEL_PCT_MIN + 1
+            progress = if (snap.panelHeightPct == 0) 0 else snap.panelHeightPct - PANEL_PCT_MIN + 1
+            onSeek { set ->
+                SettingsStore.setPanelHeightPct(this@MainActivity, if (set == 0) 0 else set + PANEL_PCT_MIN - 1)
+                recreate()
+            }
+        })
+        add(TextView(this).apply {
+            setText(getString(R.string.panel_icon) + "：" + sizeLabel(snap.panelIconDp, "dp"))
+        })
+        add(SeekBar(this).apply {
+            max = PANEL_ICON_MAX - PANEL_ICON_MIN + 1
+            progress = if (snap.panelIconDp == 0) 0 else snap.panelIconDp - PANEL_ICON_MIN + 1
+            onSeek { set ->
+                SettingsStore.setPanelIconDp(this@MainActivity, if (set == 0) 0 else set + PANEL_ICON_MIN - 1)
+                recreate()
+            }
+        })
+        add(TextView(this).apply {
+            setText(getString(R.string.panel_text) + "：" + sizeLabel(snap.panelTextSp, "sp"))
+        })
+        add(SeekBar(this).apply {
+            max = PANEL_TEXT_MAX - PANEL_TEXT_MIN + 1
+            progress = if (snap.panelTextSp == 0) 0 else snap.panelTextSp - PANEL_TEXT_MIN + 1
+            onSeek { set ->
+                SettingsStore.setPanelTextSp(this@MainActivity, if (set == 0) 0 else set + PANEL_TEXT_MIN - 1)
+                recreate()
+            }
+        })
         add(Button(this).apply {
             text = getString(R.string.open_manage)
             setOnClickListener {
@@ -160,10 +207,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    private fun pctLabel(v: Int) = if (v == 0) getString(R.string.panel_pct_default) else "$v%"
+
+    private fun sizeLabel(v: Int, unit: String) =
+        if (v == 0) getString(R.string.panel_default) else "$v$unit"
+
     private companion object {
         /** Slider bounds, shared with RemotePrefs.read so the UI cannot drift from the reader. */
         const val MIN_DP = com.repl.bubbledrawer.xposed.RemotePrefs.MIN_DP
         const val MAX_DP = com.repl.bubbledrawer.xposed.RemotePrefs.MAX_DP
+        const val PANEL_PCT_MIN = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_PCT_MIN
+        const val PANEL_PCT_MAX = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_PCT_MAX
+        const val PANEL_ICON_MIN = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_ICON_MIN
+        const val PANEL_ICON_MAX = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_ICON_MAX
+        const val PANEL_TEXT_MIN = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_TEXT_MIN
+        const val PANEL_TEXT_MAX = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_TEXT_MAX
     }
 
     private fun SeekBar.onSeek(block: (Int) -> Unit) {

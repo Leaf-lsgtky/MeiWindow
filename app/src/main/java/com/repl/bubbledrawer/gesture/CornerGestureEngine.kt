@@ -54,7 +54,21 @@ object AdaptiveSpyGestureConfig {
     // reference constants (:70-74)
     private const val INWARD_SLOP_MULTIPLIER = 1.75f
     private const val UPWARD_SLOP_MULTIPLIER = 0.50f
-    private const val INWARD_DP = 14f
+
+    /**
+     * How far the finger must travel (radially, any direction — the corner is a complete
+     * sector) before the stroke is ours.
+     *
+     * 21 dp = the LOWER edge of MiuiHome's measured 21–24 dp take-over band for the bottom
+     * strip. Two constraints pull in opposite directions and this is where they meet:
+     *  - higher = safer for taps: a stroke that never travels this far is served by the app
+     *    itself, which is what removed the double input on DOWN-driven targets (the
+     *    bottom-left keyboard key);
+     *  - lower  = we must pilfer BEFORE MiuiHome commits HOME
+     *    (`down_y - current_y > record_area_height_px`), otherwise the panel and HOME both
+     *    happen. Claiming at the band's lower edge keeps us ahead of it.
+     */
+    private const val INWARD_DP = 21f
     private const val UPWARD_DP = 4f
     private const val REVERSE_TOLERANCE_DP = 8f
 

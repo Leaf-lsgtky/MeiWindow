@@ -44,6 +44,16 @@ class BubbleDockController(
     /** Preview mode (no live finger): auto-collapse like a released gesture. */
     var previewMode = false
 
+    /**
+     * Fan "更多" tile → host hook. [com.repl.bubbledrawer.xposed.FanHost] sets this
+     * inside SystemUI and raises the overlay manage-page panel (方案 B: the same
+     * `PinManageView` the Activity hosts, pinned to the current freeform 小窗, so the
+     * page IS the window content — Flyme likewise opens SlideLaunchAppSettings with
+     * `start_windowmode` instead of a new full-screen page). Left null (e.g. a plain
+     * app-process host) the full-screen manage Activity still runs.
+     */
+    var onMoreRequested: (() -> Unit)? = null
+
     init {
         launcher.setCallback(object : GestureAppLauncher.Callback {
             override fun onItemSelected(item: GestureAppLauncher.AdapterItem, view: View, index: Int) {
@@ -57,17 +67,25 @@ class BubbleDockController(
                         // :294-317) launches SlideLaunchAppSettings (选择/管理合一页,
                         // 带 A–Z 索引条) — NOT MoreAppWindow. Per user ruling the two
                         // pages merge: the manage page IS the "更多" destination.
-                        // Explicit ComponentName by PACKAGE STRING: the caller may be
-                        // the SystemUI-hosted fan whose Context reports a different
-                        // package, and Intent(context, cls) would misattribute it.
-                        context.startActivity(
-                            Intent().setComponent(
-                                android.content.ComponentName(
-                                    com.repl.bubbledrawer.xposed.ModuleResources.MODULE_PACKAGE,
-                                    "com.repl.bubbledrawer.pin.PinManageActivity",
-                                ),
-                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
+                        // 方案 B: inside SystemUI the host answers with the overlay
+                        // 更多应用 panel (Flyme puts MoreAppWindow INTO the window);
+                        // only an Activity-less host falls back to the full-screen page.
+                        val host = onMoreRequested
+                        if (host != null) {
+                            host()
+                        } else {
+                            // Explicit ComponentName by PACKAGE STRING: the caller may be
+                            // the SystemUI-hosted fan whose Context reports a different
+                            // package, and Intent(context, cls) would misattribute it.
+                            context.startActivity(
+                                Intent().setComponent(
+                                    android.content.ComponentName(
+                                        com.repl.bubbledrawer.xposed.ModuleResources.MODULE_PACKAGE,
+                                        "com.repl.bubbledrawer.pin.PinManageActivity",
+                                    ),
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
                     }
                 }
                 retractAfterAction()

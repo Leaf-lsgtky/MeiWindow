@@ -15,19 +15,22 @@ import com.repl.bubbledrawer.pinyin.BubbleApp
  * the framework floats the app over the still-visible selection page).
  *
  * Two vendor paths, then a generic path, then fullscreen fallback:
- *  1. HyperOS/MIUI: `android.util.MiuiMultiWindowUtils.getActivityOptions(ctx,
- *     pkg, true, false)` — VERIFIED in the decompiled target SystemUI 17.03:
+ *  1. HyperOS/MIUI: `MiuiMultiWindowUtils.getActivityOptions(ctx, pkg, true, false)`
+ *     — VERIFIED in the decompiled target SystemUI 17.03:
  *     AppMiniWindowManagerImpl$launchMiniWindowActivity$1.java:133 is exactly
  *     this call (plus setFreeformAnimation(false), line 135) before
  *     PendingIntent.send(..., bundle). Static framework util → reflectable from
  *     any app; the framework may still gate the actual freeform switch for
  *     non-system callers (LSPosed phase lifts that fully).
+ *     When [position] is given the 5-argument overload with explicit
+ *     `launchBoundsLeft/Top` is used instead (MiuiMultiWindowUtils:711), which is
+ *     how the 更多页 hands the window over at the very spot the panel sat on.
  *  2. AOSP 15/16 "desktop windowing": public `setLaunchBounds(rect)` honoured
  *     as freeform when desktop mode is enabled; @hide
  *     `setLaunchWindowingMode(1)` where the ODM gate is on.
  *  3. Anything rejected → plain fullscreen launch (never worse than v0.1).
  */
-class FreeformLaunchStrategy : ILaunchStrategy {
+class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrategy {
 
     override fun launch(context: Context, app: BubbleApp): Boolean {
         val intent = context.packageManager.getLaunchIntentForPackage(app.packageName)
@@ -53,25 +56,22 @@ class FreeformLaunchStrategy : ILaunchStrategy {
         }
     }
 
-    /** HyperOS path — MiuiMultiWindowUtils.getActivityOptions(ctx, pkg, true, false). */
-    private fun miuiOptions(context: Context, pkg: String): ActivityOptions? = runCatching {
-        Class.forName("android.util.MiuiMultiWindowUtils")
-            .getMethod(
-                "getActivityOptions",
-                Context::class.java, String::class.java,
-                Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType,
-            )
-            .invoke(null, context, pkg, true, false) as? ActivityOptions
-    }.getOrNull()
+    /** HyperOS path — `MiuiMultiWindowUtils.getActivityOptions(...)`, positioned when asked. */
+    private fun miuiOptions(context: Context, pkg: String): ActivityOptions? =
+        MiuiFreeform.activityOptions(context, pkg, noCheck = true, position = position)
+            ?.let { MiuiFreeform.withoutFreeformAnimation(it) }
 
     private fun aospOptions(context: Context): ActivityOptions {
         val opts = ActivityOptions.makeBasic()
         val dm: DisplayMetrics = context.resources.displayMetrics
-        val w = (dm.widthPixels * 0.62f).toInt()
-        val h = (dm.heightPixels * 0.62f).toInt()
-        val cx = dm.widthPixels / 2
-        val cy = (dm.heightPixels * 0.45f).toInt()
-        runCatching { opts.setLaunchBounds(Rect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)) }
+        val bounds = position ?: Rect().also {
+            val w = (dm.widthPixels * 0.62f).toInt()
+            val h = (dm.heightPixels * 0.62f).toInt()
+            val cx = dm.widthPixels / 2
+            val cy = (dm.heightPixels * 0.45f).toInt()
+            it.set(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+        }
+        runCatching { opts.setLaunchBounds(bounds) }
         runCatching {
             // @hide ActivityOptions.setLaunchWindowingMode(int); 1 = WINDOWING_MODE_FREEFORM
             ActivityOptions::class.java

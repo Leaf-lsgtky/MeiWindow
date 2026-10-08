@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="panel_section_title">更多面板（长宽 / 图标 / 文字）</string>
+    <string name="panel_width">面板宽度</string>
+    <string name="panel_height">面板高度</string>
+    <string name="panel_icon">图标大小</string>
+    <string name="panel_text">文字大小</string>
+    <string name="panel_pct_default">默认 62%</string>
+    <string name="panel_default">默认</string>
+</resources>

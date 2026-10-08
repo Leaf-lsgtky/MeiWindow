@@ -6,11 +6,14 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -22,6 +25,7 @@ import com.repl.bubbledrawer.bubble.BubbleDockController
 import com.repl.bubbledrawer.bubble.GestureAppLauncher
 import com.repl.bubbledrawer.bubble.SlideGestureItemView
 import com.repl.bubbledrawer.data.AppRepository
+import com.repl.bubbledrawer.data.LaunchCountStore
 import com.repl.bubbledrawer.data.PinBackend
 import com.repl.bubbledrawer.data.PinStore
 import com.repl.bubbledrawer.data.PrefsPinBackend
@@ -30,6 +34,7 @@ import com.repl.bubbledrawer.gesture.SpySide
 import com.repl.bubbledrawer.launch.FreeformLaunchStrategy
 import com.repl.bubbledrawer.launch.FullscreenLaunchStrategy
 import com.repl.bubbledrawer.launch.ILaunchStrategy
+import com.repl.bubbledrawer.pin.PinManageView
 import de.hdodenhof.circleimageview.CircleImageView
 import kotlinx.coroutines.launch
 
@@ -96,6 +101,8 @@ class FanHost(
     init {
         if (moduleContext == null) logger(Log.ERROR, "FAN_MODULE_CONTEXT_FAILED", null)
         dock.onShownChanged = { shown -> if (!shown) fadeOutFanWindows() }
+        // 更多 tile → overlay panel instead of the full-screen Activity (方案 B)
+        dock.onMoreRequested = { showMorePanel() }
         scope.launch { runCatching { repo.loadAll() } } // warm the list for the first swipe
         // pins edits while the fan is open → live rebind (reference :85-96 watch pattern)
         pinsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -104,11 +111,22 @@ class FanHost(
         runCatching { prefs.registerOnSharedPreferenceChangeListener(pinsListener) }
         // SCREEN_OFF → retract (original mo864f :1049-1056 → m9254Z)
         val r = object : android.content.BroadcastReceiver() {
-            override fun onReceive(c: Context?, i: Intent?) { mainHandler.post { retract("SCREEN_OFF") } }
+            override fun onReceive(c: Context?, i: Intent?) {
+                mainHandler.post {
+                    hideMorePanel(animated = false)
+                    retract("SCREEN_OFF")
+                }
+            }
         }
         runCatching {
             host.registerReceiver(r, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
         }.onSuccess { screenOffReceiver = r }
+
+    }
+
+    /** adb verification hook — see `CornerInputMonitor.registerDebugReceiver`. */
+    fun toggleMorePanelForDebug() {
+        if (moreUp) hideMorePanel() else showMorePanel()
     }
 
     private var activeCorner = Corner.BOTTOM_LEFT
@@ -122,6 +140,7 @@ class FanHost(
      *  the corner — the spy was only observing until pilfer), then arm the timeout. */
     fun show(side: SpySide, downX: Float, downY: Float, screenW: Int, screenH: Int) {
         if (moduleContext == null) return // no module resources → no fan (fail closed)
+        hideMorePanel(animated = false) // a fresh stroke always starts from the fan
         activeCorner = if (side == SpySide.LEFT) Corner.BOTTOM_LEFT else Corner.BOTTOM_RIGHT
         raiseFanWindows()
         dock.previewMode = false
@@ -252,6 +271,180 @@ class FanHost(
         fanWindowsUp = false
     }
 
+    // ---------------- 更多应用 panel (方案 B: pinned on the current 小窗) ----------------
+
+    private var moreCatcher: View? = null
+    private var morePanel: FrameLayout? = null
+    private var moreContent: PinManageView? = null
+    private var moreUp = false
+    private var moreRect: Rect? = null
+
+    /**
+     * Raise the 固定管理 page (`PinManageView`) as an overlay ON TOP of whatever is on
+     * screen — inside apps too — instead of opening the full-screen manage Activity.
+     *
+     * Rect: ALWAYS the screen-centred [defaultPanelRect] (62 % of the display, the same
+     * footprint the launch default uses), never the bounds of the current小窗. Following
+     * the window was tried first and dropped: this ROM's `MiuiFreeFormManager` stack list
+     * comes back empty from SystemUI's uid (`stacks=0`) and its rect fallback returns
+     * off-screen bounds, so the panel jumped around and the 长/宽 sliders looked
+     * inconsistent. Centred + percentage sliders keeps those two controls predictable.
+     *
+     * Windows: the fan's existing pair pattern — a touchable full-screen catcher
+     * (tap outside closes, light dim) plus the panel itself at [rect]. Both keep the
+     * fan's type-2024 + trusted-overlay identity, so they stay visible inside apps.
+     */
+    private fun showMorePanel() {
+        if (moreUp || moduleContext == null) return
+        // Placement is screen-centred and independent of whatever小窗 is open; the only
+        // inputs are the two size sliders (see applyPanelSize).
+        val panelSnap = RemotePrefs.read(prefs)
+        val rect = applyPanelSize(defaultPanelRect(), panelSnap)
+        moreRect = Rect(rect)
+
+        val catcher = object : FrameLayout(context) {
+            override fun onTouchEvent(event: MotionEvent): Boolean {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) hideMorePanel()
+                return true
+            }
+        }.apply {
+            background = ColorDrawable(MORE_SCRIM_COLOR)
+            isClickable = true
+        }
+        val catcherAdded = runCatching {
+            wm.addView(catcher, fullScreenParams("bubble more catcher", touchable = true))
+        }
+        if (catcherAdded.isFailure) {
+            logger(Log.WARN, "MORE_CATCHER_FAILED", catcherAdded.exceptionOrNull())
+            return
+        }
+        moreCatcher = catcher
+
+        // The panel hosts the SAME page the fan's 更多 tile always opened: the manage
+        // page. Flyme does exactly this — the tile starts SlideLaunchAppSettings and the
+        // framework lands it inside the current window instead of a new full-screen page.
+        // Theme: the page's AppBar/TabLayout need a Material theme; FanContext carries
+        // SystemUI's, so wrap it in ours (resources still resolve to the module).
+        val themed = ContextThemeWrapper(context, R.style.Theme_BubbleDrawer)
+        val content = PinManageView(
+            context = themed,
+            repo = repo,
+            pinStore = pinStore,
+            onLaunch = { app -> launchFromPanel(app) },
+            // overlay → the page draws the ActionBar look-alike (title + 管理/完成 + ✕)
+            chrome = PinManageView.Chrome.PANEL,
+            iconDp = panelSnap.panelIconDp,
+            textSp = panelSnap.panelTextSp,
+            onClose = { hideMorePanel() },
+        )
+        val panel = FrameLayout(context).apply {
+            background = GradientDrawable().apply {
+                // MiuiMultiWindowUtils.FREEFORM_ROUND_CORNER = 25.8dp — match the ROM window
+                cornerRadius = 26f * resources.displayMetrics.density
+                setColor(themed.resources.getColor(R.color.fd_sys_color_surface_bright_default, null))
+            }
+            clipToOutline = true
+            addView(
+                content.view,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            alpha = 0f
+        }
+        val panelAdded = runCatching { wm.addView(panel, panelParams("bubble more panel", rect)) }
+        if (panelAdded.isFailure) {
+            logger(Log.WARN, "MORE_PANEL_FAILED", panelAdded.exceptionOrNull())
+            runCatching { wm.removeViewImmediate(catcher) }
+            moreCatcher = null
+            return
+        }
+        content.reload()
+        panel.animate().alpha(1f).setDuration(FADE).start()
+        morePanel = panel
+        moreContent = content
+        moreUp = true
+        panelLog(
+            "MORE_PANEL_SHOW " + rect.toShortString() + " screen=" + screenW() + "x" + screenH() +
+                " pct=" + panelSnap.panelWidthPct + "x" + panelSnap.panelHeightPct +
+                " icon=" + panelSnap.panelIconDp + " text=" + panelSnap.panelTextSp +
+                " page=" + content.describe(),
+        )
+        // Ground truth for "which page is in the panel?" — one line per open, no screenshot
+        // and no 700 ms race (a fresh stroke may silently take the panel down before that).
+        panel.post {
+            panelLog("MORE_PANEL_TREE " + (moreContent?.describe() ?: "closed-before-layout"))
+        }
+    }
+
+    /** Panel diagnostics: LSPosed's module log (lagged) plus logcat for live reading. */
+    private fun panelLog(message: String) {
+        logger(Log.INFO, message, null)
+        runCatching { Log.println(Log.INFO, "BubbleDrawer", message) }
+    }
+
+    private fun hideMorePanel(animated: Boolean = true) {
+        if (!moreUp) return
+        moreUp = false
+        moreContent?.release()
+        moreContent = null
+        moreCatcher?.let { runCatching { wm.removeViewImmediate(it) } }
+        moreCatcher = null
+        val panel = morePanel
+        morePanel = null
+        if (panel == null) return
+        if (!animated) {
+            runCatching { wm.removeViewImmediate(panel) }
+            return
+        }
+        panel.animate().alpha(0f).setDuration(FADE)
+            .withEndAction { runCatching { wm.removeViewImmediate(panel) } }
+            .start()
+        panelLog("MORE_PANEL_HIDE")
+    }
+
+    /** Panel app click → hand the very same spot to the app (Flyme: content swap). */
+    private fun launchFromPanel(app: com.repl.bubbledrawer.pinyin.BubbleApp) {
+        val rect = moreRect
+        hideMorePanel(animated = false)
+        val snap = RemotePrefs.read(prefs)
+        val strategy: ILaunchStrategy =
+            if (snap.freeform) FreeformLaunchStrategy(rect) else FullscreenLaunchStrategy()
+        val ok = runCatching { strategy.launch(context, app) }.getOrDefault(false)
+        LaunchCountStore.increment(context, app.packageName)
+        panelLog(
+            "MORE_LAUNCH " + app.packageName + " freeform=" + snap.freeform +
+                " rect=" + (rect?.toShortString() ?: "-") + " ok=" + ok,
+        )
+    }
+
+    /**
+     * 面板长宽：屏幕百分比（0 = 默认 [DEFAULT_PANEL_PCT]），始终以屏幕正中为基准。
+     * 两个轴互不影响：只拖宽度时高度保持基准值，反之亦然。
+     */
+    private fun applyPanelSize(base: Rect, snap: RemotePrefs.Snapshot): Rect {
+        val sw = screenW()
+        val sh = screenH()
+        val w = if (snap.panelWidthPct == 0) base.width() else sw * snap.panelWidthPct / 100
+        val h = if (snap.panelHeightPct == 0) base.height() else sh * snap.panelHeightPct / 100
+        val l = ((sw - w) / 2).coerceAtLeast(0)
+        val top = ((sh - h) / 2).coerceAtLeast(0)
+        return Rect(l, top, l + w, top + h)
+    }
+
+    /**
+     * 基准矩形：屏幕正中的 [DEFAULT_PANEL_PCT] 占地 —— 与启动小窗的默认尺寸一致，
+     * 所以从面板里点应用时，应用正好落在面板原来的位置。
+     */
+    private fun defaultPanelRect(): Rect {
+        val w = screenW()
+        val h = screenH()
+        val pw = (w * DEFAULT_PANEL_PCT / 100f).toInt()
+        val ph = (h * DEFAULT_PANEL_PCT / 100f).toInt()
+        return Rect((w - pw) / 2, (h - ph) / 2, (w + pw) / 2, (h + ph) / 2)
+    }
+
     /** Same window class as the SPY: type 2024 (NAVIGATION_BAR_PANEL), trusted
      *  overlay, fitInsets 0. The previous TYPE_APPLICATION_OVERLAY variant got
      *  mPolicyVisibility=false on HyperOS inside apps (isVisibleByPolicy=false —
@@ -261,9 +454,29 @@ class FanHost(
      *  cutout ALWAYS keeps origin == physical (0,0), so forwarded spy coordinates
      *  line up 1:1 (OverlayHost comment: getRealSize parity). */
     private fun fullScreenParams(title: String, touchable: Boolean) =
+        baseParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            title,
+            touchable,
+        )
+
+    /**
+     * 更多面板窗口：按 [rect] 定位（定位窗口，不是全屏）。
+     * Same type-2024 trusted-overlay identity as the fan; `LAYOUT_NO_LIMITS` +
+     * `setFitInsetsTypes(0)` keep `x/y` in physical screen coordinates, so the panel
+     * lands exactly on the centred rect [applyPanelSize] computed.
+     */
+    private fun panelParams(title: String, rect: Rect) =
+        baseParams(rect.width(), rect.height(), title, touchable = true).apply {
+            x = rect.left
+            y = rect.top
+        }
+
+    private fun baseParams(width: Int, height: Int, title: String, touchable: Boolean) =
         WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            width,
+            height,
             CornerInputMonitor.CORNER_WINDOW_TYPE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -294,12 +507,19 @@ class FanHost(
         pinsListener?.let { runCatching { prefs.unregisterOnSharedPreferenceChangeListener(it) } }
         pinsListener = null
         mainHandler.removeCallbacks(timeout)
+        hideMorePanel(animated = false)
         tearFanWindowsNow()
         dock.destroy()
     }
 
     private companion object {
         val SCRIM_COLOR = Color.parseColor("#73000000") // fd_sys_color_scrim_default night
+
+        /** 更多面板外圈轻遮罩：比扇子的 scrim 浅，面板仍是"小窗内容"而不是模态弹窗。 */
+        val MORE_SCRIM_COLOR = Color.parseColor("#33000000")
+
+        /** 默认面板占地（屏幕百分比），两个轴都用它 —— 与启动小窗的默认尺寸对齐。 */
+        const val DEFAULT_PANEL_PCT = 62
         const val FADE = 130L
         const val GESTURE_TIMEOUT_MS = 5_000L // reference CornerRadialOverlayView :1000
     }

@@ -33,11 +33,43 @@ object RemotePrefs {
     const val KEY_BOTTOM_DP = "corner_trigger_bottom_dp"
     const val KEY_EDGE_DP = "corner_trigger_edge_dp"
 
+    /**
+     * Written by the system_server arbiter hook ([LauncherMonitorRegion]) once MiuiHome's
+     * "[Gesture Monitor] swipe-up" carries a touchable region with the corner boxes cut
+     * out — i.e. the launcher's own recogniser no longer receives corner DOWNs. While that
+     * proof is present SystemUI can stay a pure observer and take nothing from the app;
+     * without it the bottom strip is owned at DOWN, because otherwise one corner swipe
+     * also commits MiuiHome's HOME animation (its recogniser decides from the first
+     * upward sample). LSPosed remote preferences are mirrored into every hooked process,
+     * which is exactly the cross-process channel this needs.
+     */
+    const val KEY_ARBITER_REGION = "arbiter_launcher_region_epoch_ms"
+
     const val DEFAULT_ENABLED = true
     const val DEFAULT_LEFT = true
     const val DEFAULT_RIGHT = true
     const val DEFAULT_RANGE_DP = 96
     const val DEFAULT_FREEFORM = false
+
+    /**
+     * 更多面板尺寸/字号（方案 B overlay）。面板始终居中，所以位置没有 key：
+     * 长/宽是"占屏幕的百分比"（0 = [PANEL_PCT_DEFAULT]，即 62 % 屏幕）。
+     */
+    const val KEY_PANEL_W_PCT = "panel_width_pct"
+    const val KEY_PANEL_H_PCT = "panel_height_pct"
+    const val KEY_PANEL_ICON_DP = "panel_icon_dp"
+    const val KEY_PANEL_TEXT_SP = "panel_text_sp"
+
+    /** 0 = 用面板的默认占地（62 % 屏幕，见 FanHost.DEFAULT_PANEL_PCT）。 */
+    const val PANEL_PCT_DEFAULT = 0
+    const val PANEL_PCT_MIN = 40
+    const val PANEL_PCT_MAX = 100
+    const val PANEL_ICON_DEFAULT = 0
+    const val PANEL_ICON_MIN = 28
+    const val PANEL_ICON_MAX = 64
+    const val PANEL_TEXT_DEFAULT = 0
+    const val PANEL_TEXT_MIN = 10
+    const val PANEL_TEXT_MAX = 20
 
     data class Snapshot(
         val enabled: Boolean,
@@ -48,6 +80,11 @@ object RemotePrefs {
         val edgeDp: Int,
         val freeform: Boolean,
         val pins: String,
+        /** 更多面板：宽/高百分比（0 = 默认 62 % 屏幕，始终居中），图标 dp / 文字 sp（0 = 布局默认） */
+        val panelWidthPct: Int = PANEL_PCT_DEFAULT,
+        val panelHeightPct: Int = PANEL_PCT_DEFAULT,
+        val panelIconDp: Int = PANEL_ICON_DEFAULT,
+        val panelTextSp: Int = PANEL_TEXT_DEFAULT,
     )
 
     fun enabledFor(side: com.repl.bubbledrawer.gesture.SpySide): (Snapshot) -> Boolean = { snap ->
@@ -73,9 +110,20 @@ object RemotePrefs {
             bottomDp = sp.getInt(KEY_BOTTOM_DP, range).coerceIn(MIN_DP, MAX_DP),
             edgeDp = sp.getInt(KEY_EDGE_DP, range).coerceIn(MIN_DP, MAX_DP),
             freeform = sp.getBoolean(KEY_FREEFORM, DEFAULT_FREEFORM),
+            panelWidthPct = pct(sp, KEY_PANEL_W_PCT),
+            panelHeightPct = pct(sp, KEY_PANEL_H_PCT),
+            panelIconDp = sizeOrZero(sp, KEY_PANEL_ICON_DP, PANEL_ICON_MIN, PANEL_ICON_MAX),
+            panelTextSp = sizeOrZero(sp, KEY_PANEL_TEXT_SP, PANEL_TEXT_MIN, PANEL_TEXT_MAX),
             pins = sp.getString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, "").orEmpty(),
         )
     }
+
+    /** 0 = 面板默认占地 / 布局默认；否则夹进滑块区间。 */
+    private fun pct(sp: SharedPreferences, key: String): Int =
+        sp.getInt(key, PANEL_PCT_DEFAULT).let { if (it <= 0) 0 else it.coerceIn(PANEL_PCT_MIN, PANEL_PCT_MAX) }
+
+    private fun sizeOrZero(sp: SharedPreferences, key: String, min: Int, max: Int): Int =
+        sp.getInt(key, 0).let { if (it <= 0) 0 else it.coerceIn(min, max) }
 
     /** Slider bounds for every axis (kept in one place so UI and reader cannot drift). */
     const val MIN_DP = 24

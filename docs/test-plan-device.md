@@ -36,10 +36,16 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - [ ] 环带外松手 → 取消收起；气泡半径带内松手 → **全屏启动**该应用
 - [ ] 快速朝角落方向甩出（>2500px/s）→ 取消手势（原版 onFling 语义）
 
-## A5 更多页
-- [ ] 气泡条尾部"更多"→ 全屏"更多应用"，4 列，首行起为第 7 个以后的应用
-- [ ] 尾部"添加应用"瓦片 → 进固定管理
-- [ ] 右上"管理"→ 固定管理页
+## A5 "更多"面板（overlay 管理页）
+- [ ] 气泡条尾部"更多"→ **当前窗口上方**浮出管理页 overlay（不再全屏新页），样式与固定管理页一致
+      （56dp 仿 ActionBar：标题 + 管理/完成 + ✕；4 列网格、★区、A–Z、字母条都在）
+- [ ] 面板**屏幕居中**；设置页"更多面板"四个滑杆（长/宽 = 占屏幕 %、图标 dp、文字 sp）改完下次开面板生效
+- [ ] 点面板外部 → 关闭；轻遮罩 `#33000000` 随面板一起收
+- [ ] 管理/完成可用：编辑态点击加/减固定、★区长按拖动排序，退出面板后顺序仍在
+- [ ] 面板里点应用 → 面板收起，应用以**面板的位置/大小**开小窗（日志 `MORE_LAUNCH … rect=`）
+- [ ] `adb shell am broadcast -a com.repl.bubbledrawer.action.DEBUG_MORE` 可开关面板；
+      `adb logcat -s BubbleDrawer` 有 `MORE_PANEL_SHOW [l,t][r,b] screen=… pct=… page=texts=[…]`
+- [ ] 全屏管理页仍可从设置页进入，且 ActionBar 的"管理/完成"菜单在
 
 ## A6 固定管理
 - [ ] 标题"选择快捷启动的应用"，tab"应用"，网格内点图标加固定（绿?角标=remove/add）

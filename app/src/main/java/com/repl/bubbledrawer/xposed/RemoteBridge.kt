@@ -96,6 +96,10 @@ object RemoteBridge {
             .putBoolean(RemotePrefs.KEY_RIGHT, snap.right)
             .putInt(RemotePrefs.KEY_RANGE_DP, snap.rangeDp)
             .putBoolean(RemotePrefs.KEY_FREEFORM, snap.freeform)
+            .putInt(RemotePrefs.KEY_PANEL_W_PCT, snap.panelWidthPct)
+            .putInt(RemotePrefs.KEY_PANEL_H_PCT, snap.panelHeightPct)
+            .putInt(RemotePrefs.KEY_PANEL_ICON_DP, snap.panelIconDp)
+            .putInt(RemotePrefs.KEY_PANEL_TEXT_SP, snap.panelTextSp)
             .commit() // synchronous: LSPosed mirrors the group only after the write lands
         Log.i(
             "BubbleDrawer",

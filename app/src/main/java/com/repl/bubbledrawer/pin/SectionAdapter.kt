@@ -1,6 +1,7 @@
 package com.repl.bubbledrawer.pin
 
 import android.annotation.SuppressLint
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -25,6 +26,10 @@ class PinGridAdapter(
     private val iconOf: (BubbleApp) -> android.graphics.drawable.Drawable?,
     private val onClick: (BubbleApp) -> Unit,
     private val onPinDragStart: (RecyclerView.ViewHolder) -> Unit,
+    /** 更多面板可调外观：图标 dp（0 = 布局默认 50dp） */
+    private val iconDp: Int = 0,
+    /** 更多面板可调外观：文字 sp（0 = 布局默认 12sp） */
+    private val textSp: Int = 0,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
@@ -93,6 +98,7 @@ class PinGridAdapter(
 
     @SuppressLint("NotifyDataSetChanged")
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        applyDisplayOverrides(holder)
         when (val cell = cells[position]) {
             is Cell.PinHead -> Unit // static texts baked into the xml head row
             is Cell.EmptyHint -> Unit // 暂无已添加应用 baked into app_settings_item_selected.xml
@@ -100,6 +106,25 @@ class PinGridAdapter(
             is Cell.Pin -> bindApp(holder as CellVH, cell.app, pinned = true)
             is Cell.App -> bindApp(holder as CellVH, cell.app, pinned = false)
         }
+    }
+
+    /** 面板外观覆盖（iconDp / textSp 为 0 时保持布局值）。 */
+    private fun applyDisplayOverrides(holder: RecyclerView.ViewHolder) {
+        val density = holder.itemView.resources.displayMetrics.density
+        if (iconDp > 0) {
+            holder.itemView.findViewById<View>(R.id.app_icon)?.let { icon ->
+                icon.layoutParams = icon.layoutParams.apply {
+                    width = (iconDp * density).toInt()
+                    height = (iconDp * density).toInt()
+                }
+            }
+        }
+        if (textSp > 0) scaleText(holder.itemView, textSp.toFloat())
+    }
+
+    private fun scaleText(view: View, sp: Float) {
+        if (view is TextView) view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+        if (view is ViewGroup) for (i in 0 until view.childCount) scaleText(view.getChildAt(i), sp)
     }
 
     private fun bindApp(holder: CellVH, app: BubbleApp, pinned: Boolean) {

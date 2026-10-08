@@ -6,18 +6,17 @@ pipeline 的，以及每一处为什么这么做。**改代码前请先读完"�
 
 ## 0. 一句话模型
 
-> 在 **SystemUI 进程**里建一条 `[Gesture Monitor]` 转发监视器当"眼睛"；底部角落触发区内的 DOWN 由我们
-> **当场 pilfer 拿下**；之后用一个纯 Kotlin 状态机判断
+> 在 **SystemUI 进程**里建一条 `[Gesture Monitor]` 转发监视器当"眼睛"；底部角落的 DOWN 由我们
+> **当场 pilfer 拿下**（或由 `system_server` 侧让桌面看不见它）；之后用一个纯 Kotlin 状态机判断
 > 这是"面板手势"还是"轻点"，轻点再交还给应用。**系统原生的左右贴边返回、底边上滑回桌面都不改**。
 
 ## 1. 进程与作用域
 
 | 进程 | 作用域 | 干什么 | 代码 |
 |---|---|---|---|
-| `com.android.systemui` | **唯一** | 手势监视器、扇子窗口、BACK 提交抑制 | `SystemUiHookInstaller`、`CornerInputMonitor`、`FanHost`、`BackGestureGuard` |
-
-> 作用域只有 SystemUI 一个。桌面侧（`com.miui.home`）和 `system_server` 侧的钩子**都已删除**：
-> 前者在 A17 上物理上进不去，后者会打断桌面的回桌面手势（见 §3.3）。
+| `com.android.systemui` | 必须 | 手势监视器、扇子窗口、BACK 提交抑制 | `SystemUiHookInstaller`、`CornerInputMonitor`、`FanHost`、`BackGestureGuard` |
+| `system`（system_server） | 可选 | 只读/实验性的"桌面监视器区域"仲裁（**当前禁用**，见 §3.3） | `LauncherMonitorRegion` |
+| `com.miui.home` | 无害但**无效** | 只读探针 `LauncherInputObserver`；A17 上根本不会加载 | 同左 |
 
 `com.miui.home` 为什么进不了：Android 17 的小米桌面由小米自己的
 `/system_ext/bin/hyos_spawner`（USAP 式进程池）fork，不走 ART zygote，所以 LSPosed 的 Java 注入
@@ -85,9 +84,7 @@ if (name != null && (name.endsWith("MultiTaskSwitch") || name.endsWith("pip-resi
   在角落根本收不到 DOWN"）：**已验证会打断桌面的底边上滑**——即使区域只是"全屏挖掉两个小角"，
   打上之后从屏幕正中间上滑也不再回桌面（`dumpsys input` 里该监视器的 inputConfig 仍打印
   `SPY`，说明 MIUI 的 dispatcher 并不按 AOSP 那样接受显式 `touchableRegion`，很可能只认 surface crop）。
-  **这套代码（`LauncherMonitorRegion`）和 `system` 作用域已经整块删除**——结论留在这里，代码不再保留。
-- **桌面进程内的只读探针**（`LauncherInputObserver` + `com.miui.home` 作用域）：A17 上**根本不会加载**
-  （见 §1），同样已删除。要看桌面侧的抢流行为，用 logcat / ftrace 观察即可（§6），不需要注入。
+  因此 `LauncherMonitorRegion.ENABLED = false`，代码保留为"此路不通"的记录。
   另外 LSPosed 的 remote preferences 在 hooked 进程里是**只读**的（`edit()` 抛
   `UnsupportedOperationException: Read only implementation`），system_server 也无法用它回报状态。
 
@@ -144,7 +141,8 @@ SYSTEMUI_CORNER_REINSTALLED_AFTER_HOT_RELOAD
 MON_INPUT_READY name=BubbleDrawer-corner-MultiTaskSwitch …
 ```
 
-模块现在只加载在 SystemUI 里，所以一次 `adb install -r` 就完成换代，没有任何进程需要重启。
+`system_server` 那一侧要等它下一次重启才会换成新代码（它没有热重载入口），但那里的 arbiter 是禁用
+状态，所以无关紧要。
 
 ## 6. 调试手册
 
@@ -152,12 +150,13 @@ MON_INPUT_READY name=BubbleDrawer-corner-MultiTaskSwitch …
 
 | 前缀 | 含义 |
 |---|---|
-| `MON_DOWN` / `MON_DOWN_REJECTED` | DOWN 是否落在触发区（含 `box=`、`band=`、`mode=pre-own\|observe`） |
+| `MON_DOWN` / `MON_DOWN_REJECTED` | DOWN 是否落在触发区（含 `box=`、`band=`、`mode=pre-own\|observe`、`arbiter=`） |
 | `MON_ACTIVATE` | 已认领并展开扇子 |
 | `MON_PILFER_OK` / `MON_PILFER_FAILED` | pilfer 结果 |
 | `MON_SWALLOWED` | 被我们吃掉但既不是扇子也不是轻点（真拖动） |
 | `MON_TAP_PASSTHROUGH_DELEGATED` / `_INJECTED` | 轻点交还：桌面补了 / 我们补了 |
 | `MON_SYSTEM_CANCEL` / `MON_SHADOW_*` | 被外力取消 / 事后夺回（少见） |
+| `ARBITER_*` | system_server 侧（当前禁用） |
 | `HOT_RELOAD*` / `MON_DISPOSED_FOR_HOT_RELOAD` | 热重载生命周期 |
 
 常用命令（真机）：
@@ -190,4 +189,4 @@ adb shell su -c "sh /data/local/tmp/sg2.sh 1150 2620 1020 2440 12 60"
 
 - 底部 28dp 冲突带内的**真拖动**（既不是扇子也不是轻点）会被吃掉，日志 `MON_SWALLOWED`。
 - 角落扇区内不再触发系统 HOME（这是刻意的：该区域归面板）。
-- 桌面侧与 system_server 侧的钩子已全部删除（见 §1、§3.3）；作用域只剩 SystemUI。
+- `LauncherInputObserver`（桌面进程探针）在 A17 上不会加载，保留仅为记录。

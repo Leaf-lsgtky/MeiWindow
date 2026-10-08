@@ -1,6 +1,5 @@
 package com.repl.bubbledrawer.xposed
 
-import android.content.Context
 import android.util.Log
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -8,15 +7,19 @@ import io.github.libxposed.api.XposedModuleInterface
 
 /**
  * libxposed API 102 module entry — structure mirrors the FlymeFreeform reference
- * (ModuleMain.kt:15-110): remote preferences at load time, per-package hook install at
- * package ready, API-102 hot reload so an APK update applies without any restart.
+ * (ModuleMain.kt:15-110): remote preferences at load time, per-package hook
+ * install at package ready, hot reload accepted.
  *
- * Scope (META-INF/xposed/scope.list): **com.android.systemui only**. Everything the module
- * does to the launcher's gesture arbitration happens by taking the DOWN inside the bottom
- * strip, which makes MiuiHome skip its own take-over; the launcher-side probes and the
- * system_server region experiment are gone (A17 MiuiHome is forked by Xiaomi's own
- * hyos_spawner so no LSPosed Java hook ever enters it, and the region patch broke the
- * launcher's HOME everywhere — see docs/input-hook-architecture.md §3).
+ * Scope (META-INF/xposed/scope.list): com.android.systemui only.
+ *
+ * The launcher-side work was tried and removed (commit "chore: remove the launcher-side
+ * hooks and the system_server region experiment"): Android 17 MiuiHome is forked by Xiaomi's
+ * own /system_ext/bin/hyos_spawner instead of the ART zygote, so no LSPosed Java hook can
+ * enter it (see docs/input-hook-architecture.md §1 and §3.4), and the system_server variant
+ * of "cooperate with the launcher" (giving its swipe-up monitor a corner-cut touchable
+ * region) broke MiuiHome's HOME gesture everywhere. What is left is the SystemUI half, which
+ * is the part that actually works: a DO_NOT_PILFER gesture monitor, DOWN-time ownership
+ * inside the bottom strip, and a sector-shaped corner trigger.
  */
 class ModuleMain : XposedModule() {
 
@@ -32,9 +35,9 @@ class ModuleMain : XposedModule() {
             log(Log.WARN, TAG, "MODULE_SKIPPED_UNEXPECTED_PROCESS")
             return
         }
-        // Exempt the @hide input classes the corner transport reflects into / links against
-        // directly (android.view.InputMonitor + InputChannel + InputEventReceiver,
-        // android.hardware.input.InputManagerGlobal). Prefixes follow
+        // Exempt the @hide input classes the corner transport reflects into / links
+        // against directly (android.view.InputMonitor + InputChannel +
+        // InputEventReceiver, android.hardware.input.InputManagerGlobal). Prefixes follow
         // AndroidHiddenApiBypass.setHiddenApiExemptions' "L<fqcn>;" signature form
         // (Helper.java). MUST run before any of those classes is resolved.
         val exempted = runCatching {
@@ -45,6 +48,9 @@ class ModuleMain : XposedModule() {
                 "Landroid/view/InputEvent;",
                 "Landroid/hardware/input/InputManagerGlobal;",
                 "Landroid/hardware/input/InputManager;",
+                // getInputMethodWindowVisibleHeight() — read once per corner DOWN to decide
+                // whether the keyboard owns that corner right now (see imeVisibleHeightPx).
+                "Landroid/view/inputmethod/InputMethodManager;",
             )
         }.getOrDefault(false)
         log(if (exempted) Log.INFO else Log.WARN, TAG, "HIDDEN_API_EXEMPT=$exempted")
@@ -78,17 +84,17 @@ class ModuleMain : XposedModule() {
 
     /**
      * API-102 HOT RELOAD — the whole point of `autoHotReload=true` in module.prop: after
-     * `adb install -r` LSPosed swaps the module classes in EVERY hooked process (SystemUI
-     * and system_server alike) without a reboot or a process restart. Our module owns live
-     * objects (the gesture monitor and its input channel, the SPY-view fallback windows, the
-     * fan's full-screen windows), so they are torn down here and a fresh instance is built in
-     * [onHotReloaded]; the framework drops the old hooks for us (we also unhook ours
-     * explicitly, since a stale handle would otherwise keep calling into the old monitor).
+     * `adb install -r` LSPosed swaps the module classes without a reboot or a process
+     * restart. Our module owns live objects (the gesture monitor and its input channel, the
+     * SPY-view fallback windows, the fan's full-screen windows), so they are torn down here
+     * and a fresh instance is built in [onHotReloaded]; the framework drops the old hooks for
+     * us (we also unhook ours explicitly, since a stale handle would otherwise keep calling
+     * into the old monitor).
      */
     override fun onHotReloading(param: XposedModuleInterface.HotReloadingParam): Boolean {
         log(Log.INFO, TAG, "HOT_RELOAD_ACCEPTED process=$processName")
         // Hand what the next generation cannot rebuild on its own to the framework: the
-        // Application Context (onCreate will not run again) and the identity of this process.
+        // Application Context (onCreate will not run again) and this process' identity.
         val context = runCatching { systemUiInstaller?.capturedContext() }.getOrNull()
         val loader = systemUiClassLoader
         runCatching {
@@ -123,9 +129,8 @@ class ModuleMain : XposedModule() {
         }.onFailure { log(Log.WARN, TAG, "HOT_RELOAD_STATE_RESTORE_FAILED", it) }
         if (processName == null) processName = param.processName
 
-        // Rebuild the SystemUI runtime the teardown removed — without it the process would be
-        // left with no monitor at all after a reload (the old one is disposed, onCreate never
-        // runs again).
+        // Rebuild the runtime the teardown removed — without it the process would be left with
+        // no monitor at all after a reload (the old one is disposed, onCreate never runs again).
         if (processName == PROCESS_SYSTEM_UI) {
             runCatching {
                 val prefs = configuration ?: getRemotePreferences(RemotePrefs.GROUP).also {

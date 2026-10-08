@@ -1,8 +1,9 @@
 # 气泡抽屉 BubbleDrawer — Flyme 小窗交互复刻
 
 复刻魅族"系统界面工具"（`com.flyme.systemuitools`）小窗**交互层**的独立 APK：
-边角斜上滑 → 气泡扇逐个弧形展开 → 拖拽瞄准 → 松手启动（本期为**全屏启动**，小窗留 `ILaunchStrategy` 接口）
-→ 尾部"更多"页 → 固定管理（拼音 A–Z 分组 + ★区≤6 + 字母索引条）。
+边角斜上滑 → 气泡扇逐个弧形展开 → 拖拽瞄准 → 松手启动（`ILaunchStrategy`：MIUI freeform 小窗 / 全屏）
+→ 尾部"更多"瓦片在**当前窗口上方**浮出同一个固定管理页（overlay，不再另开一页）
+（拼音 A–Z 分组 + ★区≤6 + 字母索引条）。
 
 所有动效/尺寸/文案/表格**逐行取自反编译产物**（`E:\workspace\flyme\out\SystemUITools_src`），
 关键处均有 `原文件:行号` 注释。设计与计划见 `docs/`。
@@ -16,7 +17,7 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 
 1. 打开"气泡抽屉" → 授予悬浮窗权限 → 勾选"启用角落手势"
 2. 从屏幕**底部左/右角落斜向上滑**（正上滑留给系统返回）
-3. 手指在扇内移动瞄准（白波纹环），松手启动；点"更多"进应用网格；管理页固定常用
+3. 手指在扇内移动瞄准（白波纹环），松手启动；点"更多"浮出管理页 overlay，选应用即按面板位置开小窗；管理页固定常用
 4. 手感不对先调"触发区"三滑杆；被系统手势抢走属预期（内缩带再调大）
 
 验证清单：`docs/test-plan-device.md`（A1–A7）。
@@ -26,7 +27,7 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 | 原版 | 本复刻 | 原因 |
 |---|---|---|
 | `ISystemGestureListener` 框架回调 + sharedUserId systemui | SystemUI 进程内 **gesture monitor**（`InputMonitor` + `InputEventReceiver`）观察整屏，越过阈值后 `pilferPointers()` 独占该笔手势（监视器建不起来时退回角落 SPY 小窗） | 目标 ROM 无 Flyme 框架；普通应用不可得 |
-| `start_windowmode`/`virtual_mode` Bundle 开小窗 | `startActivity` 全屏（`FullscreenLaunchStrategy`） | 本期不做小窗；换 freeform 只改这一个类 |
+| `start_windowmode`/`virtual_mode` Bundle 开小窗（复用当前窗口由框架 `window_ext` 决定） | `MiuiMultiWindowUtils.getActivityOptions`（freeform + 指定 bounds）由 `FreeformLaunchStrategy` 发出，不支持时退全屏 | 目标 ROM 无 Flyme 框架；MIUI 有等价能力，只换 `ILaunchStrategy` 这一个类 |
 | `Settings.Global "long_press_app"` | 应用私有 SharedPreferences（同名 key，PinBackend 接口预留 Global 后端） | `WRITE_SECURE_SETTINGS` 普通应用拿不到 |
 | MzX（AloneTabContainer/MzRecyclerView…）+ libpag | androidx/material 等价物；.pag 演示动画不搬 | 厂商私有依赖 |
 | `C4411f` 触感/`AicyPicker` 推荐 | 公开 haptic；本地启动计数 Top8 作"推荐"组 | 私有服务不可移植 |
@@ -165,24 +166,48 @@ adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracin
    `formula=down_y-current_y>record_area_height_px`。因此"等我们抢回来再让它取消"是来不及的
    （它的 home 动画已经提交），必须在它判定之前拿走。
 
-3. 于是最终行为——**触发区是角落的 1/4 椭圆（两个轴可分别配置），区内任何方向都归面板**：
+3. 于是最终行为（**DOWN 完全透传，什么都不预占**）：
 
    | 手势 | 谁处理 | 日志 |
    |---|---|---|
-   | 触发区内的 **DOWN** | **我们**：当场 `pilferPointers()` 拿下（桌面据此跳过它自己的抢流） | `MON_DOWN … mode=pre-own` → `MON_PILFER_OK` |
-   | 位移 ≥ `max(1.75×slop, 14dp)`（**任意方向**，含正上方） | **我们**：展开扇子 | `MON_ACTIVATE` |
-   | 区内**轻点**（位移 ≤ 1.5×slop 且 ≤250ms） | 先等桌面自己的 300ms 透传（`deviceId = -1`），它没补才由我们补一个 | `MON_TAP_PASSTHROUGH_DELEGATED` / `_INJECTED` |
-   | 区内**真拖动**（既不是扇子也不是轻点） | 被吃掉（已知限制） | `MON_SWALLOWED` |
-   | 触发区**外**的底边上滑 | 桌面（我们从不介入，扇区不含屏幕正中） | 只有 `MON_DOWN_REJECTED` |
+   | 角落**轻点**（向内位移 < 4dp） | 应用自己（我们从不认领） | 只有 `MON_DOWN mode=observe` |
+   | 角落**向内斜滑**（向内 ≥ 4dp，且斜率不高于 1.5:1） | **我们**：4dp 就 `pilferPointers()` 认领，之后按阈值开扇 | `MON_EARLY_CLAIM inward=… up=…` → `MON_ACTIVATE` |
+   | 底边**直上滑**（向内 ≈ 0） | 桌面（我们永不认领） | 只有 `MON_DOWN`，无认领 |
+   | 认领后改向上 | 按桌面公式在手指未抬起时就补 `KEYCODE_HOME` | `MON_UPWARD_REPLAY_HOME` |
+   | 认领后判定为轻点 | 先等桌面自己的 300ms 透传（`deviceId = -1`），它没补才由我们补一个 | `MON_TAP_PASSTHROUGH_DELEGATED` / `_INJECTED` |
 
-   为什么必须"DOWN 就抢"：桌面的 home 动画从**第一个向上采样**就开始提交，任何"晚一步再抢回来"
-   都会变成"面板和回桌面同时发生"（真机实测）。而 DOWN 抢流会让桌面走它自己的协作分支——
-   `on_pilfered_at_down: passthrough_eligible = true`、`skip DOWN pilfer`——所以这是确定的，
-   不需要竞速。
+   早期"带内（底边 28dp）预占 DOWN"的做法已经删除——它会吃掉带内 DOWN、轻点要补注入、
+   而且和桌面同时触发。现在只有**向内为主的滑动**会被认领，且一定发生在桌面判定之前：
+   实测 `MON_EARLY_CLAIM inward=44 up=44` 之后 `topResumedActivity` 仍停在原应用（**没有**回桌面），
+   直上滑则照常回桌面。
 
-   试过并已删除的做法（详见 `docs/input-hook-architecture.md`）：事后夺回（`MON_SHADOW_*` 兜底仍保留）、
-   按"向内为主"提前认领（`MON_EARLY_CLAIM`）、在 `system_server` 改桌面监视器的 `touchableRegion`、
-   以及桌面进程内的只读探针。
+   兜底仍在：距 DOWN ≤120ms 的 CANCEL 视为抢流特征，用同一个 DOWN 起点
+   `pilferPointers()` 夺回（`MON_SHADOW_REPILFER` / `MON_SHADOW_CONFIRMED`）。
+## "更多"面板（方案 B：overlay 里的管理页）
+
+原版在小窗里点"更多"，打开的应用/列表直接落在**当前窗口**里（`MoreAppWindow` →
+`AppLauncherWindow` 只写 `start_windowmode=true` + `virtual_mode=1035`，复用哪一个窗口
+由框架 `flyme.view.WindowManagerExt` / `window_ext` 决定）。本复刻不做第二个列表页，
+而是把已有的**固定管理页**当面板内容复用：
+
+| | 入口 | 窗口 |
+|---|---|---|
+| 全屏页 | 设置页"固定管理" | `PinManageActivity`（`Chrome.ACTIVITY`：ActionBar 自带标题 + 管理/完成） |
+| 面板 | 气泡条尾部"更多"瓦片 | 悬浮窗 overlay（`Chrome.PANEL`：56dp 仿 ActionBar 标题 + 管理/完成 + ✕） |
+
+- 一处 UI 两个入口：`pin/PinManageView.kt` 画全部内容，`PinManageActivity` 只是壳。
+- 窗口身份与扇子相同：`type 2024`（`TYPE_NAVIGATION_BAR_PANEL`）+ `setTrustedOverlay()`，
+  应用在前台也可见；全屏 catcher 负责"点外部关闭"+ `#33000000` 轻遮罩，面板本体圆角 26dp。
+- 面板里选中应用 → 面板收起 → 用**面板矩形**调 `FreeformLaunchStrategy(rect)`，
+  应用正好落在面板原来的位置（原版"在同一处打开"的手感）；freeform 不可用则退全屏。
+- 外观四个滑杆（设置页"更多面板"段）：`panel_width_pct` / `panel_height_pct` /
+  `panel_icon_dp` / `panel_text_sp`（0 = 默认）。长/宽是**占屏幕的百分比**，
+  面板**始终屏幕居中**，不跟随当前小窗：本 ROM 从 SystemUI 的 uid 读 MIUI 小窗栈恒为
+  `stacks=0`，`getFreeformRect` 又返回越界矩形，跟随窗口只会让面板乱跳、滑杆看起来忽大忽小。
+  图标/文字只作用于面板网格，全屏管理页仍用布局默认值。
+- 调试：`adb shell am broadcast -a com.repl.bubbledrawer.action.DEBUG_MORE` 直接开关面板；
+  日志同时进模块日志和 `adb logcat -s BubbleDrawer`（`MORE_PANEL_SHOW` 带 rect/屏幕/四个参数/
+  页内文案，`MORE_PANEL_TREE` 带整棵视图树文本）。
 
 ## 结构
 
@@ -195,7 +220,10 @@ adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracin
 - `hiddenapi/` — `@hide` 平台类的 **compileOnly** 桩（`InputMonitor`/`InputEventReceiver`/`InputChannel`/
   `InputManagerGlobal`），只参与编译，不进 APK
 - `pinyin/` — 407 项边界表（`work_tables/gen_tables.ps1` 自动转录再生成）+ 排序键/比较器
-- `more/`、`pin/` — 更多页（MoreAppWindow 移植）、固定管理（SlideLaunchAppSettings 应用页签切片 + FastScrollLetter 行为复刻）
+- `pin/PinManageView.kt` — 固定管理页（SlideLaunchAppSettings 应用页签切片 + FastScrollLetter 行为复刻），
+  一套 UI 两个入口：全屏 `PinManageActivity` 与"更多"面板 overlay（`more/` 的旧独立列表页已删除）
+- `launch/MiuiFreeform.kt` — MIUI 小窗反射桥（`MiuiFreeFormManager` 栈读回、`MiuiMultiWindowUtils.getActivityOptions`、
+  freeform 默认 rect），`FreeformLaunchStrategy` 用它开小窗
 - `root/EdgeModeHelper.kt` — 贴边模式 su 命令；`settings/MainActivity.kt` — 权限引导/调参/预览
 
 测试为整体轮跑：`.\gradlew.bat :app:testDebugUnitTest`（拼音/分组/状态机冒烟，非逐任务 TDD——按约定精简）。

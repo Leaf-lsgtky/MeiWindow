@@ -67,6 +67,18 @@ object SettingsStore {
         RemoteBridge.remote?.edit()?.putInt(RemotePrefs.KEY_EDGE_DP, v)?.apply()
     }
 
+    /** 更多面板宽/高（占屏幕百分比；0 = 默认 62 %，面板始终居中）。 */
+    fun setPanelWidthPct(context: Context, pct: Int) = putInt(context, RemotePrefs.KEY_PANEL_W_PCT, pct)
+    fun setPanelHeightPct(context: Context, pct: Int) = putInt(context, RemotePrefs.KEY_PANEL_H_PCT, pct)
+    /** 更多面板图标 dp / 文字 sp（0 = 布局默认）。 */
+    fun setPanelIconDp(context: Context, dp: Int) = putInt(context, RemotePrefs.KEY_PANEL_ICON_DP, dp)
+    fun setPanelTextSp(context: Context, sp: Int) = putInt(context, RemotePrefs.KEY_PANEL_TEXT_SP, sp)
+
+    private fun putInt(context: Context, key: String, value: Int) {
+        RemoteBridge.local(context).edit().putInt(key, value).apply()
+        RemoteBridge.remote?.edit()?.putInt(key, value)?.apply()
+    }
+
     fun setFreeform(context: Context, on: Boolean) {
         RemoteBridge.local(context).edit().putBoolean(RemotePrefs.KEY_FREEFORM, on).apply()
         RemoteBridge.remote?.edit()?.putBoolean(RemotePrefs.KEY_FREEFORM, on)?.apply()
