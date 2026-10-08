@@ -184,7 +184,7 @@ adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracin
    | 手势 | 谁处理 | 日志 |
    |---|---|---|
    | 角落**轻点**（向内位移 < 4dp） | 应用自己（我们从不认领） | 只有 `MON_DOWN mode=observe` |
-   | 角落**向内斜滑**（向内 ≥ 4dp 且不弱于向上） | **我们**：4dp 就 `pilferPointers()` 认领，之后按阈值开扇 | `MON_EARLY_CLAIM inward=… up=…` → `MON_ACTIVATE` |
+   | 角落**向内斜滑**（向内 ≥ 4dp，且斜率不高于 1.5:1） | **我们**：4dp 就 `pilferPointers()` 认领，之后按阈值开扇 | `MON_EARLY_CLAIM inward=… up=…` → `MON_ACTIVATE` |
    | 底边**直上滑**（向内 ≈ 0） | 桌面（我们永不认领） | 只有 `MON_DOWN`，无认领 |
    | 认领后改向上 | 按桌面公式在手指未抬起时就补 `KEYCODE_HOME` | `MON_UPWARD_REPLAY_HOME` |
    | 认领后判定为轻点 | 先等桌面自己的 300ms 透传（`deviceId = -1`），它没补才由我们补一个 | `MON_TAP_PASSTHROUGH_DELEGATED` / `_INJECTED` |

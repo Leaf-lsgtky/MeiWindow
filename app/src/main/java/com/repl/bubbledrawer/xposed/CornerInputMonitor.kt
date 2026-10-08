@@ -376,7 +376,12 @@ class CornerInputMonitor(
                 if (!s.owned && !s.claimAttempted) {
                     val inward = if (s.side == SpySide.LEFT) mx - s.originX else s.originX - mx
                     val upward = s.originY - my
-                    if (inward >= earlyClaimPx && inward >= upward) {
+                    // EARLY_CLAIM_RATIO forgives a gesture that climbs up to 1.5 px upward per
+                    // px inward (a steep corner drag still becomes the drawer) while a real
+                    // up-swipe, which climbs far faster, is left alone: at the moment 4 dp of
+                    // inward travel is reached such a gesture is already 60+ dp up, and the
+                    // test below is evaluated on every MOVE until it fires.
+                    if (inward >= earlyClaimPx && inward * EARLY_CLAIM_RATIO >= upward) {
                         s.claimAttempted = true
                         if (pilferMonitor()) {
                             s.markTakenOver()
@@ -1281,6 +1286,14 @@ class CornerInputMonitor(
          * in the corner stay with the app.
          */
         const val EARLY_CLAIM_DP = 4f
+
+        /**
+         * How much steeper than "45°" a stroke may climb and still be claimed as a drawer:
+         * the claim fires while `inward * EARLY_CLAIM_RATIO >= upward`. A real bottom
+         * up-swipe climbs far faster than this and is therefore never claimed, so HOME
+         * keeps working from every x, corners included.
+         */
+        const val EARLY_CLAIM_RATIO = 1.5f
 
         /** Grace after a corner stroke ends during which the native back handler's late
          *  commit attempt for the SAME stroke is still suppressed (main-looper dispatch
