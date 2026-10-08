@@ -8,12 +8,15 @@ import io.github.libxposed.api.XposedModuleInterface
 
 /**
  * libxposed API 102 module entry — structure mirrors the FlymeFreeform reference
- * (ModuleMain.kt:15-110): remote preferences at load time, per-package hook
- * install at package ready, hot reload rejected.
+ * (ModuleMain.kt:15-110): remote preferences at load time, per-package hook install at
+ * package ready, API-102 hot reload so an APK update applies without any restart.
  *
- * Scope (META-INF/xposed/scope.list): com.android.systemui + com.miui.home.
- * The launcher is in scope because the corner stroke's counterparty lives there
- * (see LauncherInputObserver); it gets a read-only probe, never a behaviour change.
+ * Scope (META-INF/xposed/scope.list): **com.android.systemui only**. Everything the module
+ * does to the launcher's gesture arbitration happens by taking the DOWN inside the bottom
+ * strip, which makes MiuiHome skip its own take-over; the launcher-side probes and the
+ * system_server region experiment are gone (A17 MiuiHome is forked by Xiaomi's own
+ * hyos_spawner so no LSPosed Java hook ever enters it, and the region patch broke the
+ * launcher's HOME everywhere — see docs/input-hook-architecture.md §3).
  */
 class ModuleMain : XposedModule() {
 
@@ -25,19 +28,13 @@ class ModuleMain : XposedModule() {
 
     override fun onModuleLoaded(param: XposedModuleInterface.ModuleLoadedParam) {
         processName = param.processName
-        if (param.processName != PROCESS_SYSTEM_UI &&
-            param.processName != PROCESS_LAUNCHER &&
-            param.processName != PROCESS_SYSTEM &&
-            param.processName != PROCESS_SYSTEM_ALT
-        ) {
+        if (param.processName != PROCESS_SYSTEM_UI) {
             log(Log.WARN, TAG, "MODULE_SKIPPED_UNEXPECTED_PROCESS")
             return
         }
-        // Exempt the @hide input classes the corner transport reflects into / links
-        // against directly (android.view.InputMonitor + InputChannel +
-        // InputEventReceiver, android.hardware.input.InputManagerGlobal), plus what the
-        // system_server arbiter touches (InputManagerService internals, InputWindowHandle,
-        // SurfaceControl.Transaction.setInputWindowInfo). Prefixes follow
+        // Exempt the @hide input classes the corner transport reflects into / links against
+        // directly (android.view.InputMonitor + InputChannel + InputEventReceiver,
+        // android.hardware.input.InputManagerGlobal). Prefixes follow
         // AndroidHiddenApiBypass.setHiddenApiExemptions' "L<fqcn>;" signature form
         // (Helper.java). MUST run before any of those classes is resolved.
         val exempted = runCatching {
@@ -48,18 +45,9 @@ class ModuleMain : XposedModule() {
                 "Landroid/view/InputEvent;",
                 "Landroid/hardware/input/InputManagerGlobal;",
                 "Landroid/hardware/input/InputManager;",
-                "Landroid/view/InputWindowHandle;",
-                "Lcom/android/server/input/InputManagerService;",
             )
         }.getOrDefault(false)
         log(if (exempted) Log.INFO else Log.WARN, TAG, "HIDDEN_API_EXEMPT=$exempted")
-        if (param.processName == PROCESS_LAUNCHER) {
-            // The launcher probe needs no configuration: it is read-only, and on Android 17
-            // this branch is in fact unreachable (MiuiHome is forked by Xiaomi's own
-            // hyos_spawner, not the ART zygote, so no LSPosed Java hook enters it).
-            log(Log.INFO, TAG, "MODULE_LAUNCHER_PROCESS_READY")
-            return
-        }
         val properties = getFrameworkProperties()
         if (properties and XposedInterface.PROP_CAP_REMOTE == 0L) {
             log(Log.WARN, TAG, "MODULE_CONFIG_REMOTE_UNAVAILABLE")
@@ -78,40 +66,8 @@ class ModuleMain : XposedModule() {
         }
     }
 
-    /**
-     * System server (process name "system"/"android") — the launcher-side arbiter lives here.
-     * This is the API-102 entry that actually fires for system_server (see the reference's
-     * HotReloadHookRuntime.java:1288-1293, which uses the same callback for its
-     * `installSystemServerHooks(...)`).
-     */
-    override fun onSystemServerStarting(param: XposedModuleInterface.SystemServerStartingParam) {
-        processName = PROCESS_SYSTEM
-        runCatching {
-            org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions(
-                "Landroid/view/InputWindowHandle;",
-                "Lcom/android/server/input/InputManagerService;",
-            )
-        }
-        log(Log.INFO, TAG, "SYSTEM_SERVER_ARBITER_INSTALLING loader=${param.classLoader}")
-        runCatching {
-            LauncherMonitorRegion(this) { priority, message, error ->
-                log(priority, TAG, message, error)
-            }.install(param.classLoader)
-        }.onFailure { log(Log.WARN, TAG, "ARBITER_INSTALL_FAILED", it) }
-    }
-
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
         if (hooksInstalled) return
-        if (processName == PROCESS_LAUNCHER && param.packageName == PROCESS_LAUNCHER) {
-            hooksInstalled = true
-            // Read-only: must never be able to take the launcher down.
-            runCatching {
-                LauncherInputObserver(this) { priority, message, error ->
-                    log(priority, TAG, message, error)
-                }.install(param.classLoader)
-            }.onFailure { log(Log.WARN, TAG, "LAUNCHER_OBSERVER_INSTALL_FAILED", it) }
-            return
-        }
         val prefs = configuration ?: return
         if (processName == PROCESS_SYSTEM_UI && param.packageName == PROCESS_SYSTEM_UI) {
             hooksInstalled = true
@@ -205,10 +161,5 @@ class ModuleMain : XposedModule() {
         const val HOOK_ID_PREFIX = "bubbledrawer."
 
         const val PROCESS_SYSTEM_UI = "com.android.systemui"
-        const val PROCESS_LAUNCHER = "com.miui.home"
-
-        /** system_server reports itself as "system" in this API and "android" in others. */
-        const val PROCESS_SYSTEM = "system"
-        const val PROCESS_SYSTEM_ALT = "android"
     }
 }

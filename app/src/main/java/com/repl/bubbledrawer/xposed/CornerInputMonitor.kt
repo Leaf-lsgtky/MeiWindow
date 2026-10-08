@@ -153,29 +153,7 @@ class CornerInputMonitor(
     private var shadowEnabled = true
     private var shadowPending = false
 
-    /**
-     * Own the DOWN inside the bottom conflict strip (corner columns only)? Decided per stroke
-     * from the arbiter proof (see beginMonitorStroke): the safe default is to own it, because
-     * com.miui.home takes the bottom band over ~9 ms after DOWN and commits its HOME animation
-     * from the very first upward sample — observing and claiming later still lets the phone go
-     * home (reported on device with a real finger; injected-touch probes lack the real finger's
-     * early velocity). Owning the DOWN makes MiuiHome skip its own take-over instead
-     * ("on_pilfered_at_down: passthrough_eligible = true", "skip DOWN pilfer").
-     *
-     * The elegant mode — take nothing at DOWN and let the app keep its touch — needs the
-     * launcher's own recogniser to stop seeing corner DOWNs, which is what
-     * [LauncherMonitorRegion] arranges from system_server (MiuiHome's "[Gesture Monitor]
-     * swipe-up" gets a touchable region with the corner boxes cut out). It publishes that proof
-     * through the shared remote preferences, and only then does this switch to observing.
-     */
-    private var bandPreOwn = true
 
-    /**
-     * Set per stroke from the arbiter proof (see [bandPreOwn]). While true, MiuiHome does not
-     * receive DOWNs inside the corner strip, so gestures there are ours to serve — including
-     * the system's "swipe up = HOME", which the upward-commit path replays.
-     */
-    private var arbiterProven = false
 
     private val shadowWatchdog = Runnable {
         if (shadowPending) {
@@ -478,21 +456,20 @@ class CornerInputMonitor(
             }
             return
         }
-        // OWN THE DOWN INSIDE THE CONFLICT STRIP — unless the system_server arbiter has
-        // proven that MiuiHome's own "[Gesture Monitor] swipe-up" no longer receives corner
-        // DOWNs (LauncherMonitorRegion cuts the corner boxes out of its touchable region and
-        // publishes that proof through the shared remote preferences). With the proof, the
-        // launcher cannot recognise HOME there and cannot pilfer, so observing is enough and
-        // the app keeps its own DOWN; without it, owning the DOWN is the deterministic
-        // option (the launcher then skips its take-over: "on_pilfered_at_down ...").
-        arbiterProven = prefs.getLong(RemotePrefs.KEY_ARBITER_REGION, 0L) > 0L
+        // OWN THE DOWN INSIDE THE CONFLICT STRIP. MiuiHome takes the bottom band over ~9 ms
+        // after DOWN and commits its HOME animation from the very first upward sample, so the
+        // only deterministic option is to own the stroke first — a DOWN-time pilfer makes the
+        // launcher skip its own take-over ("on_pilfered_at_down: passthrough_eligible = true",
+        // "skip DOWN pilfer"). Late take-back, early 4dp claiming, and a system_server
+        // touchableRegion patch were all tried on device and failed; see
+        // docs/input-hook-architecture.md §3 before changing this.
         val bottom = displayBounds().bottom
         val inHomeBand = y >= bottom - HOME_GESTURE_BAND_DP * density
-        val owned = !arbiterProven && inHomeBand && pilferMonitor()
+        val owned = inHomeBand && pilferMonitor()
         logger(
             Log.INFO,
             "MON_DOWN side=$side x=$x y=$y box=${cornerBoxPx()} band=$inHomeBand " +
-                "mode=${if (owned) "pre-own" else "observe"} arbiter=$arbiterProven " +
+                "mode=${if (owned) "pre-own" else "observe"} " +
                 "shadow=${shadowWorks?.toString() ?: "unknown"} " + boundsForLog(),
             null,
         )

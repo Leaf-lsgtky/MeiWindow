@@ -108,33 +108,19 @@ SPY_RIGHT_SYSTEM_CANCEL tracking=true claimed=false                 (+9 ms)
 （模块日志零 `TOKEN_PILFER`、旧 `InputMonitor.pilferPointers` hook 也从未命中，
 正是因为调用方在 com.miui.home 里）。
 
-**运行时确认（一次即可）**：
+**运行时确认（已做完，代码不再保留桌面侧钩子）**：
 
-模块现在把 **`com.miui.home` 也放进了 LSPosed 作用域**（`META-INF/xposed/scope.list`），
-并在**桌面进程内**装了一个**只读探针**（`xposed/LauncherInputObserver.kt`）：它在桌面进程里
-hook 框架输入 API（`InputMonitor.pilferPointers` / `InputManagerGlobal.pilferPointers(IBinder)` /
-`cancelCurrentTouch` / `InputManager.injectInputEvent` / `monitorGestureInput` /
-MIUI 的 `updateInputMonitor*`），**只记日志、随后 `proceed()`，绝不改行为**（在桌面进程里
-写错会造成桌面崩溃循环，比抽屉不优雅严重得多）。
+模块一度把 `com.miui.home` 也放进作用域、在桌面进程里装只读探针，并试过在 `system_server` 里改桌面
+监视器的 `touchableRegion`。三条路都已删除，原因写在 `docs/input-hook-architecture.md`：
 
-这一步是关键分叉点：桌面用 JNI 调**框架 Java 方法**时，代码跑在**桌面进程内**，
-于是能用纯 Java hook 拦（可做优雅方案）；如果这些日志**一条都不出现**，说明桌面走的是
-**原生 AIDL/binder** 直连，那就必须像 MiuiHome 手势 hook 项目那样做原生内联 hook
-（该项目的 `miui-home-hyos-native/` 里有完整体系：`miui_home_native_hook.cpp`(242KB)、
-`input_monitor_pilfer_hook.S`、Dart/运行时解析器、`native_init.list` 入口与
-`safe_lsposed_native_deploy.py` 部署脚本——是一个成熟但体量很大的系统）。
+- Android 17 的桌面由小米自己的 `/system_ext/bin/hyos_spawner` fork，不走 ART zygote，
+  LSPosed 的 Java 注入**永远进不去**（加了作用域、重启桌面后日志里 0 条 `LAUNCHER_*`）；
+- 改监视器区域的实验在真机上**把桌面的底边上滑整个打断**（连屏幕正中间上滑都不回桌面），
+  已回滚并保留为"此路不通"的记录；
+- 结论：Java 层能做的协同就是"在 DOWN 抢整笔"，桌面会据此跳过它自己的抢流
+  （`on_pilfered_at_down: passthrough_eligible = true`、`skip DOWN pilfer`）。
 
-日志判据：
-
-| 日志 | 含义 |
-|---|---|
-| `LAUNCHER_MONITOR_PILFER` / `LAUNCHER_TOKEN_PILFER` | 桌面用 Java pilfer 抢流 → **可纯 Java 拦** |
-| `LAUNCHER_CANCEL_CURRENT_TOUCH` | 桌面直接取消整笔触摸 |
-| `LAUNCHER_INJECT_INPUT_EVENT action=… x=… y=…` | 桌面自己的 tap 透传补发（判定"双击"问题） |
-| `LAUNCHER_MONITOR_CREATE name=swipe-up` | 确认那条 spy 监视器就是它建的 |
-| 一条都没有 | 走原生路径 → 需要原生内联 hook 体系 |
-
-也可以直接用 logcat / ftrace 从系统侧确认：
+用 logcat / ftrace 从系统侧观察抢流的方法（只用于分析，不影响行为）：
 
 ```powershell
 adb logcat -v time | Select-String -Pattern 'GestureInputMonitor|pilfer|redirecting|passthrough|GestureStub'
@@ -179,23 +165,25 @@ adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracin
    `formula=down_y-current_y>record_area_height_px`。因此"等我们抢回来再让它取消"是来不及的
    （它的 home 动画已经提交），必须在它判定之前拿走。
 
-3. 于是最终行为（**DOWN 完全透传，什么都不预占**）：
+3. 于是最终行为——**触发区是角落的 1/4 椭圆（两个轴可分别配置），区内任何方向都归面板**：
 
    | 手势 | 谁处理 | 日志 |
    |---|---|---|
-   | 角落**轻点**（向内位移 < 4dp） | 应用自己（我们从不认领） | 只有 `MON_DOWN mode=observe` |
-   | 角落**向内斜滑**（向内 ≥ 4dp，且斜率不高于 1.5:1） | **我们**：4dp 就 `pilferPointers()` 认领，之后按阈值开扇 | `MON_EARLY_CLAIM inward=… up=…` → `MON_ACTIVATE` |
-   | 底边**直上滑**（向内 ≈ 0） | 桌面（我们永不认领） | 只有 `MON_DOWN`，无认领 |
-   | 认领后改向上 | 按桌面公式在手指未抬起时就补 `KEYCODE_HOME` | `MON_UPWARD_REPLAY_HOME` |
-   | 认领后判定为轻点 | 先等桌面自己的 300ms 透传（`deviceId = -1`），它没补才由我们补一个 | `MON_TAP_PASSTHROUGH_DELEGATED` / `_INJECTED` |
+   | 触发区内的 **DOWN** | **我们**：当场 `pilferPointers()` 拿下（桌面据此跳过它自己的抢流） | `MON_DOWN … mode=pre-own` → `MON_PILFER_OK` |
+   | 位移 ≥ `max(1.75×slop, 14dp)`（**任意方向**，含正上方） | **我们**：展开扇子 | `MON_ACTIVATE` |
+   | 区内**轻点**（位移 ≤ 1.5×slop 且 ≤250ms） | 先等桌面自己的 300ms 透传（`deviceId = -1`），它没补才由我们补一个 | `MON_TAP_PASSTHROUGH_DELEGATED` / `_INJECTED` |
+   | 区内**真拖动**（既不是扇子也不是轻点） | 被吃掉（已知限制） | `MON_SWALLOWED` |
+   | 触发区**外**的底边上滑 | 桌面（我们从不介入，扇区不含屏幕正中） | 只有 `MON_DOWN_REJECTED` |
 
-   早期"带内（底边 28dp）预占 DOWN"的做法已经删除——它会吃掉带内 DOWN、轻点要补注入、
-   而且和桌面同时触发。现在只有**向内为主的滑动**会被认领，且一定发生在桌面判定之前：
-   实测 `MON_EARLY_CLAIM inward=44 up=44` 之后 `topResumedActivity` 仍停在原应用（**没有**回桌面），
-   直上滑则照常回桌面。
+   为什么必须"DOWN 就抢"：桌面的 home 动画从**第一个向上采样**就开始提交，任何"晚一步再抢回来"
+   都会变成"面板和回桌面同时发生"（真机实测）。而 DOWN 抢流会让桌面走它自己的协作分支——
+   `on_pilfered_at_down: passthrough_eligible = true`、`skip DOWN pilfer`——所以这是确定的，
+   不需要竞速。
 
-   兜底仍在：距 DOWN ≤120ms 的 CANCEL 视为抢流特征，用同一个 DOWN 起点
-   `pilferPointers()` 夺回（`MON_SHADOW_REPILFER` / `MON_SHADOW_CONFIRMED`）。
+   试过并已删除的做法（详见 `docs/input-hook-architecture.md`）：事后夺回（`MON_SHADOW_*` 兜底仍保留）、
+   按"向内为主"提前认领（`MON_EARLY_CLAIM`）、在 `system_server` 改桌面监视器的 `touchableRegion`、
+   以及桌面进程内的只读探针。
+
 ## 结构
 
 - `bubble/GestureAppLauncher.kt` — 948 行原版的逐通道移植（双 AnimatorSet、极坐标、扇区瞄准、fling/scroll 取消语义）
