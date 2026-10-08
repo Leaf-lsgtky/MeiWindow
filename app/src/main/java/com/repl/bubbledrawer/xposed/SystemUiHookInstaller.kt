@@ -24,6 +24,11 @@ class SystemUiHookInstaller(
     fun install(classLoader: ClassLoader) {
         // Keep the resolved classloader for the back-gesture corner gate below.
         appClassLoader = classLoader
+        // Which class creates the monitors that carry DO_NOT_PILFER (see the class docs) —
+        // read-only, and installed before ours exists so creation order is visible too.
+        MonitorCreationObserver(module) { priority, message, error ->
+            module.log(priority, TAG, message, error)
+        }.install(classLoader)
         // AOSP SystemUI names its Application com.android.systemui.SystemUIApplication
         // (reference SystemUiHookInstaller.kt:59). HyperOS 17.03 does NOT have that
         // class at all — its manifest declares the application as

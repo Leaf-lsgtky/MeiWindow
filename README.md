@@ -144,37 +144,58 @@ adb shell su -c "echo 1 > /sys/kernel/tracing/events/binder/binder_transaction/e
 adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracing/trace"
 ```
 
-即**系统为"底边上滑 = 回桌面"预留的那条带子里，有 SystemUI 之外的进程在 DOWN 后
-~8ms 把触摸接管走**；它只有在"别人还持有该手势"时才能得手——我们一旦先 pilfer，
-整段日志里再没出现过随后的 CANCEL，这正是快滑能过的原因。所以现在：
+### 最终方案：不预占 DOWN，而是"抢在桌面判定之前认领"
 
-- **带内（底边上方 28dp）**：DOWN 当场 `pilferPointers()` 拿下，不再和它抢；
-- **带外**：维持"先观察、过阈值才认领"的透传语义，角落轻点/应用内拖动不受影响；
+真机核对（`dumpsys input` + `/sys/kernel/tracing` + 反编译本机 `services.jar`）把机制完全钉死了：
 
-#### 现在默认走"夺回"而不是"预占"（无需猜测区域）
+1. **监视器名字决定它能不能被抢。** 反编译本机 `/system/framework/services.jar`
+   （classes2 `com.android.server.input.GestureMonitorSpyWindow:30-33`）：
 
-真机日志显示：能被抢走的笔都在底边带内，而**带外**的笔照常认领成功；每次失败的形态都是
-"我们正在观察的那笔被 CANCEL"。于是改成**被动夺回**：平时完全不预占（DOWN 归应用，
-轻点/拖动不受影响），**只有当我们在追踪的那笔手势被外力 CANCEL 掉时**（且距 DOWN ≤120ms，
-即抢流特征）才 `pilferPointers()` 把笔夺回来，并用**原来的 DOWN 起点**继续跑同一个状态机——
-开扇、上滑回桌面、轻点补发的逻辑一字未改，但不再需要"28dp 带子"这个猜测值，也不再
-在 DOWN 时刻吃掉任何东西。
+   ```java
+   this.mWindowHandle.inputConfig = 16388;               // SPY | TRUSTED_OVERLAY
+   if (name != null && (name.endsWith("MultiTaskSwitch") || name.endsWith("pip-resize"))) {
+       this.mWindowHandle.inputConfig |= DisplayDeviceInfo.FLAG_ALLOWS_CONTENT_MODE_SWITCH;
+   }
+   ```
 
-- 夺回成功后若 200ms 内没有后续事件，判定本机"夺不回" → 自动退回旧的"带内预占"模式
-  （日志 `MON_SHADOW_FAILED_FALLBACK_TO_OWNED_BAND`），**不会退化成打不开**；
-- 确认可用则记 `MON_SHADOW_CONFIRMED`，此后一直走优雅路径；
-- 每笔只尝试一次夺回，避免和桌面来回抢（`MON_SHADOW_REPILFER ok=…`）。
-- 带内被我们拿下、最后不是扇子而是**向上滑**时，按桌面自己的公式
-  （`down_y - current_y > record_area_height` ≈ 本带高度）**在手指还没抬起时就提交**
-  `KEYCODE_HOME`（不再等松手），日志 `MON_UPWARD_REPLAY_HOME`；
-  （若你想改成补发 BACK 而不是 HOME，改一处常量即可。）
-- 带内被拿下、最后判定为**轻点**（位移 ≤ 1.5×slop、时长 ≤ 250ms）时补注入一个 tap
-  还给应用：**先等 700ms**（桌面自己的透传是 `scheduled passthrough after 300ms`，留足抖动余量），
-  并在自己的监视器流里检查**从 DOWN 起**是否出现过任何外部注入事件（注入事件 `deviceId = -1`），
-  **只有它没补才由我们补**（`MON_TAP_PASSTHROUGH_DELEGATED` / `MON_TAP_PASSTHROUGH_INJECTED`）。
-  这样即使桌面也补发了 tap，也只会触发一次——即"点击可能触发两次"的修法。
+   `FLAG_ALLOWS_CONTENT_MODE_SWITCH = 1048576`，而这一位正是 `dumpsys input` 打印的
+   **`DO_NOT_PILFER`**。实测：`MultiTaskSwitch`（名字匹配）带该位，别人抢流时**仍留在触摸状态里**；
+   我们旧名字、以及桌面自己的 `swipe-up` 都没有这一位，被抢时**整个从触摸状态里消失**。
+   所以监视器名字改成 `BubbleDrawer-corner-MultiTaskSwitch`（监视器记账按 token 不按名字，不会撞车）。
 
+2. **抢流者与时机**（按住不放的角落手势，`dumpsys input` 的 `TouchStatesByDisplay`）：
 
+   ```
+   0: name='7bcf4df InputMethod'                        targetFlags=FOREGROUND | SPLIT  ← 应用才是主目标
+   1: name='PointerEventDispatcherOverlay0'             … DO_NOT_PILFER
+   2: name='[Gesture Monitor] BubbleDrawer-corner-…'    pilferingPointerIds=<none>      ← 我们只是观察者
+   3: name='[Gesture Monitor] MultiTaskSwitch'          … DO_NOT_PILFER
+   4: name='[Gesture Monitor] swipe-up'                 pilferingPointerIds=0…01        ← 桌面抢走了
+   ```
+
+   也就是说**不是"某个神秘进程"，而是 `com.miui.home` 的那条 spy 监视器**在 DOWN 后约 9ms
+   把底部区域的触摸 pilfer 走，然后再按手指走向判定；它自己的 Rust 串就是证据：
+   ` Home gesture recognized, delay pilfer`、
+   `formula=down_y-current_y>record_area_height_px`。因此"等我们抢回来再让它取消"是来不及的
+   （它的 home 动画已经提交），必须在它判定之前拿走。
+
+3. 于是最终行为（**DOWN 完全透传，什么都不预占**）：
+
+   | 手势 | 谁处理 | 日志 |
+   |---|---|---|
+   | 角落**轻点**（向内位移 < 4dp） | 应用自己（我们从不认领） | 只有 `MON_DOWN mode=observe` |
+   | 角落**向内斜滑**（向内 ≥ 4dp 且不弱于向上） | **我们**：4dp 就 `pilferPointers()` 认领，之后按阈值开扇 | `MON_EARLY_CLAIM inward=… up=…` → `MON_ACTIVATE` |
+   | 底边**直上滑**（向内 ≈ 0） | 桌面（我们永不认领） | 只有 `MON_DOWN`，无认领 |
+   | 认领后改向上 | 按桌面公式在手指未抬起时就补 `KEYCODE_HOME` | `MON_UPWARD_REPLAY_HOME` |
+   | 认领后判定为轻点 | 先等桌面自己的 300ms 透传（`deviceId = -1`），它没补才由我们补一个 | `MON_TAP_PASSTHROUGH_DELEGATED` / `_INJECTED` |
+
+   早期"带内（底边 28dp）预占 DOWN"的做法已经删除——它会吃掉带内 DOWN、轻点要补注入、
+   而且和桌面同时触发。现在只有**向内为主的滑动**会被认领，且一定发生在桌面判定之前：
+   实测 `MON_EARLY_CLAIM inward=44 up=44` 之后 `topResumedActivity` 仍停在原应用（**没有**回桌面），
+   直上滑则照常回桌面。
+
+   兜底仍在：距 DOWN ≤120ms 的 CANCEL 视为抢流特征，用同一个 DOWN 起点
+   `pilferPointers()` 夺回（`MON_SHADOW_REPILFER` / `MON_SHADOW_CONFIRMED`）。
 ## 结构
 
 - `bubble/GestureAppLauncher.kt` — 948 行原版的逐通道移植（双 AnimatorSet、极坐标、扇区瞄准、fling/scroll 取消语义）
