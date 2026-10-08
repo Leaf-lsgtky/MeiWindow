@@ -23,7 +23,10 @@
     <string name="module_connected">已连接（%1$s）</string>
     <string name="module_disconnected">未连接：请在 LSPosed 中启用本模块并勾选 SystemUI，然后重启 SystemUI</string>
     <string name="module_howto">角落手势与扇形面板运行在系统界面（SystemUI）进程内：安装本 APK 后，在 LSPosed 中启用模块、作用域勾选「系统界面」（com.android.systemui），重启 SystemUI 即生效；设置改动实时同步，无需重启。系统原生贴边返回手势不受影响——只有明确的内滑上提才会被接管。</string>
-    <string name="range_title">触发区半径（自贴边角落的 1/4 圆，px=dp×密度）</string>
+    <string name="range_title">触发区默认半径（两个轴都未单独设置时使用；px=dp×密度）</string>
+    <string name="range_bottom">沿底边范围（向内可触发的距离）</string>
+    <string name="range_edge">沿侧边范围（向上可触发的距离）</string>
+    <string name="range_hint">触发区是角落的 1/4 椭圆：两个轴可独立设置——「沿底边」决定横向能伸多长，「沿侧边」决定贴着边缘能向上够多高。两轴相等时就是普通的 1/4 圆。手指落在区内后，任何方向（含正上方）都算面板手势。</string>
     <string name="trigger_pos">触发位置</string>
     <string name="pos_both">底部双侧</string>
     <string name="pos_left">仅左角</string>

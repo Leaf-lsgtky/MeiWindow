@@ -21,6 +21,9 @@ class SystemUiHookInstaller(
     private var inputMonitor: CornerInputMonitor? = null
     private var appClassLoader: ClassLoader? = null
 
+    /** captured when the Application first runs — needed to rebuild after a hot reload */
+    private var appContext: Context? = null
+
     fun install(classLoader: ClassLoader) {
         // Keep the resolved classloader for the back-gesture corner gate below.
         appClassLoader = classLoader
@@ -64,7 +67,41 @@ class SystemUiHookInstaller(
         if (!installed) module.log(Log.ERROR, TAG, "SYSTEMUI_NO_APPLICATION_HOOKABLE")
     }
 
+    /**
+     * Tear the runtime down for a hot reload: the monitor (and its input channel), the fan
+     * windows and every hook installed here belong to the classloader being replaced. The
+     * framework drops the hooks; the live objects are ours to release, and `bound` is reset
+     * so [reinstall] can bind again.
+     */
+    fun dispose() {
+        runCatching { inputMonitor?.dispose() }
+        inputMonitor = null
+        bound.set(false)
+        module.log(Log.INFO, TAG, "SYSTEMUI_CORNER_DISPOSED_FOR_HOT_RELOAD")
+    }
+
+    /**
+     * Rebuild after a hot reload. `Application.onCreate` has already run in this process, so
+     * hooking it again would never fire — the runtime is restarted directly from the Context
+     * the old instance handed over through `HotReloadingParam.setSavedInstanceState(...)`
+     * (falling back to the system Context, which is enough for a gesture monitor).
+     */
+    fun reinstall(context: Context) {
+        appContext = context
+        appClassLoader = appClassLoader ?: context.classLoader
+        if (bound.compareAndSet(false, true)) {
+            module.log(Log.INFO, TAG, "SYSTEMUI_CORNER_REINSTALLED_AFTER_HOT_RELOAD")
+            startInputMonitor(context)
+        } else {
+            module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_REINSTALL_ALREADY_BOUND")
+        }
+    }
+
+    /** The Application Context captured at first start — handed to the next generation. */
+    fun capturedContext(): Context? = appContext
+
     private fun startInputMonitor(context: Context) {
+        appContext = context
         try {
             val monitor = CornerInputMonitor(context, prefs) { priority, message, error ->
                 module.log(priority, TAG, message, error)

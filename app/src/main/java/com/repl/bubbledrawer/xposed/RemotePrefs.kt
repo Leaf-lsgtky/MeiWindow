@@ -23,6 +23,17 @@ object RemotePrefs {
     const val KEY_FREEFORM = "freeform"
 
     /**
+     * Trigger REGION, not just its size: the corner is a quarter-ELLIPSE whose two
+     * semi-axes are set independently — how far the zone reaches ALONG the bottom edge
+     * ([KEY_BOTTOM_DP]) and how far it reaches UP the side edge ([KEY_EDGE_DP]). Equal
+     * values give the plain quarter-disc; a large edge axis with a small bottom axis is
+     * "swipe up along the side", the opposite is "swipe in along the bottom". Both fall
+     * back to [KEY_RANGE_DP] so an existing install keeps its single slider behaviour.
+     */
+    const val KEY_BOTTOM_DP = "corner_trigger_bottom_dp"
+    const val KEY_EDGE_DP = "corner_trigger_edge_dp"
+
+    /**
      * Written by the system_server arbiter hook ([LauncherMonitorRegion]) once MiuiHome's
      * "[Gesture Monitor] swipe-up" carries a touchable region with the corner boxes cut
      * out — i.e. the launcher's own recogniser no longer receives corner DOWNs. While that
@@ -45,6 +56,8 @@ object RemotePrefs {
         val left: Boolean,
         val right: Boolean,
         val rangeDp: Int,
+        val bottomDp: Int,
+        val edgeDp: Int,
         val freeform: Boolean,
         val pins: String,
     )
@@ -58,15 +71,25 @@ object RemotePrefs {
 
     /** Pins share PrefsPinBackend.KEY so hooked and app processes use one key. */
     fun read(sp: SharedPreferences?): Snapshot {
-        if (sp == null) return Snapshot(false, false, false, DEFAULT_RANGE_DP, false, "")
+        if (sp == null) {
+            return Snapshot(false, false, false, DEFAULT_RANGE_DP, DEFAULT_RANGE_DP, DEFAULT_RANGE_DP, false, "")
+        }
+        val range = sp.getInt(KEY_RANGE_DP, DEFAULT_RANGE_DP).coerceIn(MIN_DP, MAX_DP)
         return Snapshot(
             enabled = sp.getBoolean(KEY_ENABLED, DEFAULT_ENABLED),
             left = sp.getBoolean(KEY_LEFT, DEFAULT_LEFT),
             right = sp.getBoolean(KEY_RIGHT, DEFAULT_RIGHT),
-            rangeDp = sp.getInt(KEY_RANGE_DP, DEFAULT_RANGE_DP)
-                .coerceIn(24, 160), // FlymeFreeform ModulePreferences MIN/MAX (ModulePreferences.kt:22-23)
+            rangeDp = range,
+            // The two axes default to the single "size" value, so an existing install keeps
+            // its behaviour until the new sliders are touched.
+            bottomDp = sp.getInt(KEY_BOTTOM_DP, range).coerceIn(MIN_DP, MAX_DP),
+            edgeDp = sp.getInt(KEY_EDGE_DP, range).coerceIn(MIN_DP, MAX_DP),
             freeform = sp.getBoolean(KEY_FREEFORM, DEFAULT_FREEFORM),
             pins = sp.getString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, "").orEmpty(),
         )
     }
+
+    /** Slider bounds for every axis (kept in one place so UI and reader cannot drift). */
+    const val MIN_DP = 24
+    const val MAX_DP = 160
 }

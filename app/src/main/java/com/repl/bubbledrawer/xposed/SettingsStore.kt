@@ -48,9 +48,23 @@ object SettingsStore {
     }
 
     fun setRangeDp(context: Context, dp: Int) {
-        val v = dp.coerceIn(24, 160)
+        val v = dp.coerceIn(RemotePrefs.MIN_DP, RemotePrefs.MAX_DP)
         RemoteBridge.local(context).edit().putInt(RemotePrefs.KEY_RANGE_DP, v).apply()
         RemoteBridge.remote?.edit()?.putInt(RemotePrefs.KEY_RANGE_DP, v)?.apply()
+    }
+
+    /** Trigger region axis along the bottom edge (dp). */
+    fun setBottomDp(context: Context, dp: Int) {
+        val v = dp.coerceIn(RemotePrefs.MIN_DP, RemotePrefs.MAX_DP)
+        RemoteBridge.local(context).edit().putInt(RemotePrefs.KEY_BOTTOM_DP, v).apply()
+        RemoteBridge.remote?.edit()?.putInt(RemotePrefs.KEY_BOTTOM_DP, v)?.apply()
+    }
+
+    /** Trigger region axis up the side edge (dp). */
+    fun setEdgeDp(context: Context, dp: Int) {
+        val v = dp.coerceIn(RemotePrefs.MIN_DP, RemotePrefs.MAX_DP)
+        RemoteBridge.local(context).edit().putInt(RemotePrefs.KEY_EDGE_DP, v).apply()
+        RemoteBridge.remote?.edit()?.putInt(RemotePrefs.KEY_EDGE_DP, v)?.apply()
     }
 
     fun setFreeform(context: Context, on: Boolean) {

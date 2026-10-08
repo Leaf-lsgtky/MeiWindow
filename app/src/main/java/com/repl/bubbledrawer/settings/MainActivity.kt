@@ -87,13 +87,41 @@ class MainActivity : AppCompatActivity() {
 
         add(TextView(this).apply { setText(R.string.range_title) })
         add(SeekBar(this).apply {
-            max = 160 - 24
-            progress = SettingsStore.snapshot(this@MainActivity).rangeDp - 24
+            max = MAX_DP - MIN_DP
+            progress = SettingsStore.snapshot(this@MainActivity).rangeDp - MIN_DP
             onSeek { set ->
-                SettingsStore.setRangeDp(this@MainActivity, set + 24)
+                SettingsStore.setRangeDp(this@MainActivity, set + MIN_DP)
                 refreshState()
             }
         })
+
+        // Trigger REGION (not only its size): the corner is a quarter-ellipse and these two
+        // sliders are its axes — how far it reaches along the bottom edge and up the side
+        // edge. Both default to the radius above.
+        val snap = SettingsStore.snapshot(this)
+        add(TextView(this).apply {
+            setText(getString(R.string.range_bottom) + "：" + snap.bottomDp + "dp")
+        })
+        add(SeekBar(this).apply {
+            max = MAX_DP - MIN_DP
+            progress = snap.bottomDp - MIN_DP
+            onSeek { set ->
+                SettingsStore.setBottomDp(this@MainActivity, set + MIN_DP)
+                recreate()
+            }
+        })
+        add(TextView(this).apply {
+            setText(getString(R.string.range_edge) + "：" + snap.edgeDp + "dp")
+        })
+        add(SeekBar(this).apply {
+            max = MAX_DP - MIN_DP
+            progress = snap.edgeDp - MIN_DP
+            onSeek { set ->
+                SettingsStore.setEdgeDp(this@MainActivity, set + MIN_DP)
+                recreate()
+            }
+        })
+        add(TextView(this).apply { setText(R.string.range_hint); textSize = 12f })
 
         // freeform ("小窗启动") toggle — where the device supports desktop/freeform
         // windows the app floats over the current page; otherwise fullscreen
@@ -131,6 +159,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private companion object {
+        /** Slider bounds, shared with RemotePrefs.read so the UI cannot drift from the reader. */
+        const val MIN_DP = com.repl.bubbledrawer.xposed.RemotePrefs.MIN_DP
+        const val MAX_DP = com.repl.bubbledrawer.xposed.RemotePrefs.MAX_DP
+    }
 
     private fun SeekBar.onSeek(block: (Int) -> Unit) {
         setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {

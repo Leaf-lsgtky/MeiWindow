@@ -63,6 +63,30 @@ class LauncherMonitorRegion(
     fun install(classLoader: ClassLoader) {
         if (installed) return
         installed = true
+        if (!ENABLED) {
+            // DISABLED ON DEVICE EVIDENCE — do not re-enable without a new approach.
+            //
+            // The region write itself works (`ARBITER_REGION … ok=true`), but with it in
+            // place MiuiHome loses its bottom up-swipe ENTIRELY: verified on device, an
+            // up-swipe from the middle of the bottom edge no longer returns Home once the
+            // patch is live, even though the patched region is the full screen minus two
+            // small corner boxes and the monitor still prints its stock
+            // `inputConfig=NOT_FOCUSABLE | TRUSTED_OVERLAY | SPY`. So MIUI's dispatcher is
+            // not honouring an explicitly supplied `touchableRegion` on a spy window the way
+            // AOSP does — most likely it only ever uses the surface crop, and clearing
+            // `replaceTouchableRegionWithCrop` leaves the recogniser with nothing. The
+            // corner drawer keeps working the deterministic way instead: CornerInputMonitor
+            // owns the DOWN inside the strip, which makes MiuiHome skip its own take-over
+            // ("on_pilfered_at_down: passthrough_eligible = true", "skip DOWN pilfer").
+            //
+            // If this is ever revisited, the shape to try is a CROP (MIUI's own
+            // `updateInputMonitorTouchRegoinWithCrop(token, Rect)` keeps that flag true), but
+            // a crop is a rectangle — it cannot carve the corner columns out of the bottom
+            // band, which is exactly what this needs. A launcher-side native hook (see the
+            // reference project's miui-home-hyos-native payload) is the only route that can.
+            logger(Log.WARN, "ARBITER_DISABLED_BY_EVIDENCE", null)
+            return
+        }
         val clazz = runCatching { classLoader.loadClass(IMS) }
             .recoverCatching { Class.forName(IMS) }
             .getOrNull()
@@ -148,14 +172,12 @@ class LauncherMonitorRegion(
             )
             if (ok) {
                 applied = true
-                // Publish the proof through the shared remote preferences: SystemUI reads it
-                // to decide between pure observation and owning the DOWN in the strip.
-                runCatching {
-                    module.getRemotePreferences(RemotePrefs.GROUP)
-                        .edit()
-                        .putLong(RemotePrefs.KEY_ARBITER_REGION, System.currentTimeMillis())
-                        .apply()
-                }.onFailure { logger(Log.WARN, "ARBITER_PUBLISH_FAILED", it) }
+                // NOTE: the shared remote preferences cannot carry the proof — LSPosed hands
+                // hooked processes a READ-ONLY proxy ("UnsupportedOperationException: Read
+                // only implementation" from edit()), so system_server can never publish it.
+                // Any future arbiter needs a channel that works in that direction (Binder
+                // service, Settings.Global, …) before SystemUI can rely on it.
+                logger(Log.INFO, "ARBITER_REGION_APPLIED_NO_PROOF_CHANNEL", null)
             }
         }
         if (!applied) {
@@ -222,6 +244,13 @@ class LauncherMonitorRegion(
     }
 
     private companion object {
+        /**
+         * OFF by device evidence: with the patch live MiuiHome's bottom up-swipe stops
+         * working everywhere (see install()). Kept as documentation of what was tried and
+         * why the Java-reachable half of "cooperate with the launcher" is not viable.
+         */
+        const val ENABLED = false
+
         const val IMS = "com.android.server.input.InputManagerService"
 
         /** MiuiHome's home-gesture spy monitor (dumpsys input: "[Gesture Monitor] swipe-up"). */

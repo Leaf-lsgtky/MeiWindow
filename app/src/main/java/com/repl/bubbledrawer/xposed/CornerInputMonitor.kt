@@ -24,6 +24,7 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import com.repl.bubbledrawer.gesture.AdaptiveSpyGestureConfig
 import com.repl.bubbledrawer.gesture.CornerGestureEngine
+import com.repl.bubbledrawer.gesture.CornerSector
 import com.repl.bubbledrawer.gesture.CornerTriggerRegion
 import com.repl.bubbledrawer.gesture.SpyAction
 import com.repl.bubbledrawer.gesture.SpyGestureConfig
@@ -208,6 +209,27 @@ class CornerInputMonitor(
         prefs.registerOnSharedPreferenceChangeListener { _, _ ->
             if (Looper.myLooper() == mainHandler.looper) applySettings() else mainHandler.post(::applySettings)
         }
+    }
+
+    /**
+     * Tear everything down for an API-102 HOT RELOAD (no reboot, no SystemUI restart):
+     * the monitor and its input channel, the SPY-view fallback windows and the fan all
+     * belong to the OLD classloader and must not survive the swap — otherwise the reload
+     * leaves a second subscriber on the same gestures and a stale full-screen window that
+     * swallows touches. `onHotReloaded` re-installs a fresh instance afterwards.
+     */
+    fun dispose() {
+        mainHandler.removeCallbacksAndMessages(null)
+        runCatching { stopMonitorTransport() }
+        for (side in bindings.keys.toList()) {
+            val binding = bindings[side] ?: continue
+            runCatching { removeBinding(side, binding) }
+        }
+        runCatching { fan?.destroy() }
+        fan = null
+        stroke = null
+        monitorActive = false
+        logger(Log.INFO, "MON_DISPOSED_FOR_HOT_RELOAD", null)
     }
 
     private fun applySettings() {
@@ -495,27 +517,29 @@ class CornerInputMonitor(
      * finger touch (FlymeFreeform commentary, CornerGestureEngine :104-112).
      */
     private fun sideFor(x: Float, y: Float): SpySide? {
-        // COMPLETE QUARTER-DISC (sector) at each bottom corner — not a square, and not
-        // direction-gated: once the DOWN is inside the sector every direction belongs to the
-        // drawer, straight up included (user request: "完整扇形…即使上方也能" — a swipe up
-        // from the corner must open the panel, not go HOME). CornerZone.detectSide's shape,
-        // radius = the configured trigger range.
+        // COMPLETE QUARTER-ELLIPSE (sector) at each bottom corner — not a square, not
+        // direction-gated, and no longer a circle: the two axes are configured separately
+        // (how far the zone reaches ALONG the bottom edge and how far UP the side edge), so
+        // "swipe in along the bottom" and "swipe up along the side" can be tuned
+        // independently. Equal axes give the plain quarter-disc again. Once the DOWN is
+        // inside, every direction belongs to the drawer, straight up included.
         val b = displayBounds()
-        val radius = cornerBoxPx()
-        val fromBottom = b.bottom - y
-        if (fromBottom < 0f || fromBottom > radius) return null
-        if (settings.left && x >= b.left &&
-            hypot(x - b.left, fromBottom) <= radius
-        ) {
+        val bottom = bottomExtentPx()
+        val edge = edgeExtentPx()
+        if (settings.left && CornerSector.contains(x, y, b.width().toFloat(), b.bottom.toFloat(), bottom, edge, leftCorner = true)) {
             return SpySide.LEFT
         }
-        if (settings.right && x <= b.right &&
-            hypot(b.right - x, fromBottom) <= radius
-        ) {
+        if (settings.right && CornerSector.contains(x, y, b.width().toFloat(), b.bottom.toFloat(), bottom, edge, leftCorner = false)) {
             return SpySide.RIGHT
         }
         return null
     }
+
+    private fun bottomExtentPx(): Float =
+        (CornerTriggerRegion.radiusPx(settings.bottomDp, density) + 0.5f).toInt().toFloat()
+
+    private fun edgeExtentPx(): Float =
+        (CornerTriggerRegion.radiusPx(settings.edgeDp, density) + 0.5f).toInt().toFloat()
 
     /**
      * Physical display bounds for the corner gate.
@@ -555,8 +579,8 @@ class CornerInputMonitor(
         return (settings.left && x <= b.left + outer) || (settings.right && x >= b.right - outer)
     }
 
-    private fun cornerBoxPx(): Float =
-        (CornerTriggerRegion.radiusPx(settings.rangeDp, density) + 0.5f).toInt().toFloat()
+    /** Largest axis of the corner region — used for logs and the fallback view's size. */
+    private fun cornerBoxPx(): Float = maxOf(bottomExtentPx(), edgeExtentPx())
 
     /** Only the monitor's channel is made the touch target; the app keeps everything else. */
     private fun pilferMonitor(): Boolean {
