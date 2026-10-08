@@ -82,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           apk=$(ls dist/*.apk)
-          unzip -p "$apk" META-INF/xposed/java_init.list | grep -qx 'com.repl.bubbledrawer.Main'
+          unzip -p "$apk" META-INF/xposed/java_init.list | grep -qx 'com.repl.bubbledrawer.xposed.ModuleMain'
           unzip -p "$apk" META-INF/xposed/scope.list | grep -qx 'com.android.systemui'
           echo "LSPosed entry point and scope verified."
 
