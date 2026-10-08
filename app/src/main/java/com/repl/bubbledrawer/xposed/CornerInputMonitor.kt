@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.hardware.input.InputManager
 import android.hardware.input.InputManagerGlobal
 import android.os.Handler
@@ -153,7 +154,8 @@ class CornerInputMonitor(
             Log.INFO,
             "PREFS_APPLIED enabled=" + settings.enabled + " left=" + settings.left +
                 " right=" + settings.right + " range=" + settings.rangeDp +
-                " transport=" + if (monitorActive) "monitor" else "spy-view",
+                " transport=" + if (monitorActive) "monitor" else "spy-view" +
+                " " + boundsForLog(),
             null,
         )
     }
@@ -165,8 +167,7 @@ class CornerInputMonitor(
         try {
             // Assign before anything else can throw: a monitor we created but failed to
             // wire must still be disposed, or its input channel leaks in system_server.
-            val created = InputManagerGlobal.getInstance()
-                .monitorGestureInput(MONITOR_NAME, DISPLAY_ID)
+            val created = createMonitor()
             monitor = created
             val channel = created.inputChannel
             receiver = object : InputEventReceiver(channel, Looper.getMainLooper()) {
@@ -184,9 +185,13 @@ class CornerInputMonitor(
                 }
             }
             monitorActive = true
+            // channel.token is @hide too: never let a diagnostics call decide whether the
+            // transport counts as up.
+            val tokenDesc = runCatching { channel.token.toString() }.getOrElse { "?" }
             logger(
                 Log.INFO,
-                "MON_INPUT_READY name=$MONITOR_NAME display=$DISPLAY_ID channel=${channel.token}",
+                "MON_INPUT_READY name=$MONITOR_NAME display=$DISPLAY_ID channel=$tokenDesc " +
+                    boundsForLog(),
                 null,
             )
         } catch (t: Throwable) {
@@ -194,6 +199,47 @@ class CornerInputMonitor(
             logger(Log.WARN, "MON_INPUT_UNAVAILABLE_FALLBACK_SPY_VIEW", t)
             disposeMonitor()
         }
+    }
+
+    /**
+     * Three creation routes, tried in order, so one linkage failure cannot disable the
+     * primary transport on its own:
+     *  1. the direct call — exactly what SystemUI's own InputMonitorCompat does;
+     *  2. the same class through reflection (dodges a direct-link hidden-API denial);
+     *  3. the public `InputManager` facade's @hide `monitorGestureInput`.
+     * Every failure is accumulated into the thrown message so the module log names the
+     * exact route that broke.
+     */
+    private fun createMonitor(): InputMonitor {
+        val failures = StringBuilder()
+        runCatching {
+            InputManagerGlobal.getInstance().monitorGestureInput(MONITOR_NAME, DISPLAY_ID)
+        }.onSuccess { logger(Log.INFO, "MON_CREATE_ROUTE=direct", null); return it }
+            .onFailure { failures.append("direct{").append(it).append("} ") }
+
+        runCatching {
+            val cls = Class.forName("android.hardware.input.InputManagerGlobal")
+            val instance = cls.getMethod("getInstance").invoke(null)
+            cls.getMethod(
+                "monitorGestureInput",
+                String::class.java,
+                Int::class.javaPrimitiveType,
+            ).invoke(instance, MONITOR_NAME, DISPLAY_ID) as InputMonitor
+        }.onSuccess { logger(Log.INFO, "MON_CREATE_ROUTE=reflect-global", null); return it }
+            .onFailure { failures.append("reflect-global{").append(it).append("} ") }
+
+        runCatching {
+            InputManager::class.java
+                .getMethod(
+                    "monitorGestureInput",
+                    String::class.java,
+                    Int::class.javaPrimitiveType,
+                )
+                .invoke(inputManager, MONITOR_NAME, DISPLAY_ID) as InputMonitor
+        }.onSuccess { logger(Log.INFO, "MON_CREATE_ROUTE=reflect-inputmanager", null); return it }
+            .onFailure { failures.append("reflect-inputmanager{").append(it).append("} ") }
+
+        throw IllegalStateException("no gesture-monitor route: $failures")
     }
 
     private fun stopMonitorTransport() {
@@ -262,7 +308,18 @@ class CornerInputMonitor(
         if (!settings.enabled) return
         val x = ev.rawX
         val y = ev.rawY
-        val side = sideFor(x, y) ?: return
+        val side = sideFor(x, y)
+        if (side == null) {
+            if (nearCorner(x, y)) {
+                logger(
+                    Log.INFO,
+                    "MON_DOWN_REJECTED x=$x y=$y box=${cornerBoxPx()} ${boundsForLog()}" +
+                        " left=${settings.left} right=${settings.right}",
+                    null,
+                )
+            }
+            return
+        }
         val config = AdaptiveSpyGestureConfig.create(
             displayWidth = screenW().toFloat(),
             displayHeight = screenH().toFloat(),
@@ -277,7 +334,7 @@ class CornerInputMonitor(
         stroke = s
         logger(
             Log.INFO,
-            "MON_DOWN side=$side x=$x y=$y box=${cornerBoxPx()} eligible=true",
+            "MON_DOWN side=$side x=$x y=$y box=${cornerBoxPx()} ${boundsForLog()}",
             null,
         )
     }
@@ -290,10 +347,49 @@ class CornerInputMonitor(
      */
     private fun sideFor(x: Float, y: Float): SpySide? {
         val size = cornerBoxPx()
-        if (y < screenH() - size) return null
-        if (settings.left && x <= size) return SpySide.LEFT
-        if (settings.right && x >= screenW() - size) return SpySide.RIGHT
+        val b = displayBounds()
+        if (y < b.bottom - size) return null
+        if (settings.left && x <= b.left + size) return SpySide.LEFT
+        if (settings.right && x >= b.right - size) return SpySide.RIGHT
         return null
+    }
+
+    /**
+     * Physical display bounds for the corner gate.
+     *
+     * `currentWindowMetrics` describes the area a MATCH_PARENT window would occupy and
+     * may EXCLUDE system decorations: on this ROM the navigation-bar strip measures
+     * 65 px in PORTRAIT (dumpsys: NavigationBar0 frame=[0,2591][1220,2656]), while in
+     * landscape that inset is taken off the WIDTH and the height stays 1220. Anchoring
+     * the band to `currentWindowMetrics.bottom` therefore floats it ~65 px above the
+     * physical bottom edge in portrait and rejects exactly the touches users make at
+     * the very corner — which is what "works in landscape, not in portrait" looks like.
+     * `maximumWindowMetrics` is the full display; take the union so the band can never
+     * end up above the physical edge on either metric.
+     */
+    private fun displayBounds(): Rect {
+        val max = wm.maximumWindowMetrics.bounds
+        val cur = wm.currentWindowMetrics.bounds
+        return Rect(
+            minOf(max.left, cur.left),
+            minOf(max.top, cur.top),
+            maxOf(max.right, cur.right),
+            maxOf(max.bottom, cur.bottom),
+        )
+    }
+
+    private fun boundsForLog(): String {
+        val max = wm.maximumWindowMetrics.bounds
+        val cur = wm.currentWindowMetrics.bounds
+        return "cur=${cur.width()}x${cur.height()} max=${max.width()}x${max.height()}"
+    }
+
+    /** True inside a box twice the trigger size — used to log near misses (gate diagnosis). */
+    private fun nearCorner(x: Float, y: Float): Boolean {
+        val outer = cornerBoxPx() * 2f
+        val b = displayBounds()
+        if (y < b.bottom - outer) return false
+        return (settings.left && x <= b.left + outer) || (settings.right && x >= b.right - outer)
     }
 
     private fun cornerBoxPx(): Float =
@@ -512,8 +608,8 @@ class CornerInputMonitor(
         false
     }
 
-    private fun screenW(): Int = wm.currentWindowMetrics.bounds.width()
-    private fun screenH(): Int = wm.currentWindowMetrics.bounds.height()
+    private fun screenW(): Int = displayBounds().width()
+    private fun screenH(): Int = displayBounds().height()
 
     private fun ensureFan(): FanHost {
         var f = fan
@@ -541,7 +637,19 @@ class CornerInputMonitor(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             setFitInsetsTypes(0)
             setTrustedOverlayMethod.invoke(this)
-            inputFeaturesField.setInt(this, inputFeaturesField.getInt(this) or INPUT_FEATURE_SPY)
+            // SPY keeps this window a pure observer (it never becomes the touch target),
+            // DO_NOT_PILFER keeps it in the dispatcher's touch state while another window
+            // takes the pointers. Both bits are what the platform's own monitors carry:
+            // InputConfigAdapter maps LayoutParams.inputFeatures (AOSP
+            // INPUT_FEATURE_SPY = 1<<2, INPUT_FEATURE_DO_NOT_PILFER = 1<<3) onto
+            // InputConfig, and InputManagerService's GestureMonitorSpyWindow sets exactly
+            // `inputConfig = SPY | DO_NOT_PILFER` (16388, GestureMonitorSpyWindow.java:35).
+            // Without DO_NOT_PILFER this fallback window is dropped ~6-22 ms after
+            // ACTION_DOWN inside apps, which is the bug this whole change fixes.
+            inputFeaturesField.setInt(
+                this,
+                inputFeaturesField.getInt(this) or INPUT_FEATURE_SPY or INPUT_FEATURE_DO_NOT_PILFER,
+            )
         }
 
     /**
@@ -752,6 +860,9 @@ class CornerInputMonitor(
 
     companion object {
         const val INPUT_FEATURE_SPY = 1 shl 2          // reference :363
+        /** LayoutParams.inputFeatures bit that InputConfigAdapter maps to
+         *  InputConfig.DO_NOT_PILFER (see the flag table in createLayoutParams). */
+        const val INPUT_FEATURE_DO_NOT_PILFER = 1 shl 3
         const val CORNER_WINDOW_TYPE = 2024            // reference :364 (TYPE_ACCESSIBILITY_OVERLAY)
         const val CORNER_INPUT_CHANNEL_TITLE = "BubbleDrawer-corner-spy" // reference :365
 
