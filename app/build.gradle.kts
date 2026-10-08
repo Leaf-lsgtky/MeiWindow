@@ -10,7 +10,16 @@ android {
         applicationId = "com.repl.bubbledrawer"
         minSdk = 33
         targetSdk = 35
-        versionCode = 1
+        // versionCode from the git commit count, like the MiuiBackGestureHook reference
+        // (its AGENTS.md: "versionCode is derived from the Git commit count"): with
+        // autoHotReload the APK is reinstalled constantly, and a changing versionCode is what
+        // lets LSPosed's module list (and the user) tell one build from the next. Falls back
+        // to 1 outside a git checkout so a source tarball still builds.
+        versionCode = runCatching {
+            providers.exec {
+                commandLine("git", "rev-list", "--count", "HEAD")
+            }.standardOutput.asText.get().trim().toInt()
+        }.getOrDefault(1)
         versionName = "0.1"
     }
     buildTypes {
