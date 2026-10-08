@@ -31,6 +31,7 @@ import com.repl.bubbledrawer.gesture.SpyPhase
 import com.repl.bubbledrawer.gesture.SpySide
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+import kotlin.math.hypot
 
 /**
  * Corner-stroke capture INSIDE the SystemUI process, with TWO transports.
@@ -101,6 +102,20 @@ class CornerInputMonitor(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val density = context.resources.displayMetrics.density
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+
+    /** a stroke that moved no further than this counts as a tap at release */
+    private val tapSlopPx = touchSlop * 1.5f
+
+    /** upward travel at which the system's bottom up-swipe (HOME) is committed */
+    private val homeCommitPx = HOME_GESTURE_BAND_DP * density
+
+    /** uptime of the last INJECTED event that was not ours (deviceId < 0) */
+    @Volatile
+    private var lastForeignInjectedUptime = 0L
+
+    /** uptime of our own injected passthrough tap, so we do not read it back as foreign */
+    @Volatile
+    private var lastOwnInjectUptime = 0L
 
     private val getViewRootImplMethod: Method =
         View::class.java.getDeclaredMethod("getViewRootImpl").apply { isAccessible = true }
@@ -271,6 +286,13 @@ class CornerInputMonitor(
     /** One dispatcher event from the gesture monitor; returns whether WE claimed the stream. */
     private fun onMonitorEvent(event: InputEvent): Boolean {
         val ev = event as? MotionEvent ?: return false
+        if (ev.deviceId < 0) {
+            // Injected by someone else (MiuiHome's own passthrough tap, a test harness, …).
+            // deviceId -1 is the platform's injected marker.
+            if (SystemClock.uptimeMillis() - lastOwnInjectUptime > OWN_INJECT_GUARD_MS) {
+                lastForeignInjectedUptime = SystemClock.uptimeMillis()
+            }
+        }
         if (!ev.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) {
             logger(Log.INFO, "MON_NON_TOUCHSOURCE src=${ev.source}", null)
             stroke?.cancel()
@@ -556,6 +578,12 @@ class CornerInputMonitor(
         /** the stroke moved like the system's bottom up-swipe, not like the drawer */
         private var upwardIntent = false
 
+        /** the system up-swipe was already committed mid-gesture (never commit twice) */
+        private var upwardCommitted = false
+
+        /** ACTION_DOWN uptime — the tap/short-gesture test at release */
+        private var downUptime = 0L
+
         /** uptime of the last CLAIMED stroke end (0 = never) — read by [isCornerCommitWindow]. */
         var lastClaimedEndUptime: Long = 0L
             private set
@@ -575,6 +603,8 @@ class CornerInputMonitor(
             owned = newOwned
             pilferAttempted = false
             upwardIntent = false
+            upwardCommitted = false
+            downUptime = SystemClock.uptimeMillis()
             originX = x
             originY = y
             engine.down(newPointerId, x, y, newSide)
@@ -586,9 +616,11 @@ class CornerInputMonitor(
             val cfg = config ?: return
             // While WE own the stream, a clearly upward stroke is the system's bottom
             // up-swipe (HOME on this ROM), never the drawer: stop feeding the drawer
-            // engine and remember the intent for UP, where it gets replayed to the
-            // system. Mirrors MiuiBackGestureHook's non-terminal intent gate
-            // (hasXiaomiBackIntent :78-82) and the engine's own vertical rule.
+            // engine and commit the system gesture. Mirrors MiuiHome's OWN home formula
+            // (its Rust strings: `formula=down_y-current_y>record_area_height_px`,
+            // ` Home gesture recognized, delay pilfer`), and — because the launcher
+            // commits as soon as the finger leaves its record area rather than on
+            // release — we commit at the same moment instead of waiting for UP.
             if (owned && !claimed) {
                 val inward = if (side == SpySide.LEFT) x - originX else originX - x
                 val upward = originY - y
@@ -600,6 +632,10 @@ class CornerInputMonitor(
                             "MON_UPWARD_INTENT side=${side.name} inward=$inward upward=$upward",
                             null,
                         )
+                    }
+                    if (!upwardCommitted && upward >= homeCommitPx) {
+                        upwardCommitted = true
+                        replayUpwardGesture()
                     }
                     return
                 }
@@ -633,14 +669,37 @@ class CornerInputMonitor(
                 // stay-open / collapse (m9729p :531-556), exactly like the original
                 // forwarding window. NEVER force-retract here: the fan owns this decision.
                 forwardToFan(raw)
-            } else if (upwardIntent && owned) {
-                // We owned the DOWN, so the system never saw this stroke: replay the
-                // gesture the user actually made, or owning the corner would break
-                // "swipe up from the bottom to go HOME". Only when the finger is STILL
-                // above the origin at release — an upward start that comes back down is
-                // a cancelled gesture, not a home swipe.
-                val stillUp = config?.let { originY - y > it.upwardThreshold } ?: false
-                if (stillUp) replayUpwardGesture() else logger(Log.INFO, "MON_UPWARD_ABORTED", null)
+            } else if (owned) {
+                if (upwardIntent) {
+                    // Only if the mid-gesture commit above did not already fire, and only
+                    // when the finger is STILL above the origin — an upward start that
+                    // comes back down is a cancelled gesture, not a home swipe.
+                    val stillUp = config?.let { originY - y > it.upwardThreshold } ?: false
+                    if (!upwardCommitted && stillUp) {
+                        replayUpwardGesture()
+                    } else if (!upwardCommitted) {
+                        logger(Log.INFO, "MON_UPWARD_ABORTED", null)
+                    }
+                } else {
+                    // Not the drawer and not the system up-swipe: if the user just TAPPED
+                    // inside the band, the app never saw it (we owned the DOWN). MiuiHome
+                    // answers a DOWN-time pilfer with its own delayed passthrough
+                    // (`on_pilfered_at_down: passthrough_eligible = true`,
+                    // `scheduled passthrough after 300ms`, `injecting tap x=`), so wait
+                    // past that window, watch for its injected tap on our own monitor
+                    // stream, and only inject one ourselves when it did not arrive.
+                    val moved = hypot(x - originX, y - originY)
+                    val duration = SystemClock.uptimeMillis() - downUptime
+                    if (moved <= tapSlopPx && duration <= TAP_MAX_MS) {
+                        scheduleTapPassthrough(x, y)
+                    } else {
+                        logger(
+                            Log.INFO,
+                            "MON_SWALLOWED moved=${moved.toInt()} duration=$duration",
+                            null,
+                        )
+                    }
+                }
             }
             engine.up(pointerId)
             end(retract = false)
@@ -660,11 +719,57 @@ class CornerInputMonitor(
             claimed = false
             owned = false
             upwardIntent = false
+            upwardCommitted = false
             pilferAttempted = false
             pointerId = -1
             config = null
             if (wasClaimed || wasOwned) lastClaimedEndUptime = SystemClock.uptimeMillis()
             if (retract) retractFan()
+        }
+    }
+
+    /**
+     * Hand a TAP inside the owned band back to the app. We owned its DOWN, so without
+     * this the tap would simply vanish (the user's "一些点击操作也被吞了").
+     *
+     * MiuiHome already answers a DOWN-time pilfer with its own passthrough — its Rust
+     * strings are explicit: `on_pilfered_at_down: passthrough_eligible = true`,
+     * `maybe_schedule_passthrough_on_up`, `scheduled passthrough after 300ms x=`,
+     * `passthrough timeout fired, injecting tap x=` — so injecting unconditionally
+     * would double-tap. Instead we wait past its 300 ms window while our own monitor
+     * (which keeps receiving every event) watches for its injected tap (injected events
+     * arrive with deviceId -1); only when none showed up do we inject one ourselves.
+     */
+    private fun scheduleTapPassthrough(x: Float, y: Float) {
+        val mark = SystemClock.uptimeMillis()
+        mainHandler.postDelayed({
+            if (lastForeignInjectedUptime > mark) {
+                logger(Log.INFO, "MON_TAP_PASSTHROUGH_DELEGATED", null)
+            } else {
+                injectTap(x, y)
+            }
+        }, TAP_PASSTHROUGH_DELAY_MS)
+    }
+
+    /** MotionEvent DOWN+UP at the same point; MiuiHome injects its passthrough the same way. */
+    private fun injectTap(x: Float, y: Float) {
+        val method = injectInputEventMethod
+        if (method == null) {
+            logger(Log.WARN, "MON_TAP_PASSTHROUGH_UNAVAILABLE", null)
+            return
+        }
+        try {
+            val now = SystemClock.uptimeMillis()
+            val down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, x, y, 0)
+            val up = MotionEvent.obtain(now, now + 32, MotionEvent.ACTION_UP, x, y, 0)
+            lastOwnInjectUptime = now
+            method.invoke(inputManager, down, 0)
+            method.invoke(inputManager, up, 0)
+            down.recycle()
+            up.recycle()
+            logger(Log.INFO, "MON_TAP_PASSTHROUGH_INJECTED x=$x y=$y", null)
+        } catch (t: Throwable) {
+            logger(Log.WARN, "MON_TAP_PASSTHROUGH_FAILED", t)
         }
     }
 
@@ -995,10 +1100,23 @@ class CornerInputMonitor(
          * Height of the system's reserved bottom band inside which we OWN the DOWN.
          * Measured on this device: every timely-cancelled corner stroke started ≤70 px
          * (21 dp) above the bottom edge, every stroke that survived started ≥77 px
-         * (24 dp) up (or pilfered first). 28 dp keeps the whole observed band owned with
-         * a small margin; everything above it stays a pure observer.
+         * (24 dp) up (or pilfered first). The counterparty is **com.miui.home**: its
+         * native (Rust) `GestureInputMonitor` owns exactly this bottom "record area"
+         * (`record_area_height_px`, `formula=down_y-current_y>record_area_height_px`,
+         * `Home pilfer_pointers`) and takes the gesture away from the app inside it.
+         * 28 dp keeps the whole observed band owned with a small margin; everything
+         * above it stays a pure observer.
          */
         const val HOME_GESTURE_BAND_DP = 28f
+
+        /** a stroke shorter than this that barely moved counts as a tap */
+        const val TAP_MAX_MS = 250L
+
+        /** wait past MiuiHome's own 300 ms passthrough before injecting our own tap */
+        const val TAP_PASSTHROUGH_DELAY_MS = 350L
+
+        /** window in which an injected event is assumed to be our own */
+        const val OWN_INJECT_GUARD_MS = 200L
 
         /** Grace after a corner stroke ends during which the native back handler's late
          *  commit attempt for the SAME stroke is still suppressed (main-looper dispatch

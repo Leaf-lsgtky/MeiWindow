@@ -79,18 +79,61 @@ SPY_RIGHT_SYSTEM_CANCEL tracking=true claimed=false                 (+9 ms)
 | 全部 `MON_SYSTEM_CANCEL`（DOWN 后 6–22ms） | ≤ 70px（21dp） |
 | 存活并成功认领 | ≥ 77px（24dp）**或**抢在抢流之前完成 pilfer |
 
+### 抢流者是谁：`com.miui.home`（系统桌面）
+
+`dumpsys input` 里那条全屏 spy 监视器 `[Gesture Monitor] swipe-up` 的
+`ownerPid=32577 ownerUid=10149` 就是 **com.miui.home**。它已用 Rust 重写
+（APK 内**没有 dex**，只有 `libapp_launcher.so` / `libapp.so` 等），但 Rust 的
+符号与日志串把逻辑说得很清楚：
+
+- `app_launcher::recents::gesture::gesture_input_monitor` + `GestureInputMonitorImpl`
+  —— 它自己有一个手势输入监视器；
+- **底部"录音区"就是它认领的主场**：
+  `record_area_height_px`、`formula=down_y-current_y>record_area_height_px`、
+  `init_record_area_height_cache` → `getRecordAreaHeight`
+  （`com.miui.voiceassist.contentprovider.GlobalContentProvider`）、
+  `gesture_up: record_area_height_px UNKNOWN, default in_record_area=true`
+  —— 实测的 ≤21dp 边界正是这个区域高度；
+- 拿手手段两套都在：`input_InputMonitor_pilferPointers`（对应
+  ` Home pilfer_pointers`、` Home gesture recognized, delay pilfer`）与
+  `input_MiuiInputManager_request_redirect`（`redirect policy disallowed redirection to '…'`、
+  `Redirect motion event on view(…)`）——后者就是 MiuiBackGestureHook 笔记里写到的
+  "DOWN-time RedirectionHelper.requestRedirect 仲裁"；
+- 它自己也承认会吃掉手势：`on_pilfered_at_down: passthrough_eligible = true`、
+  `scheduled passthrough after 300ms x=`、`passthrough timeout fired, injecting tap x=`
+  ——**别人在 DOWN 抢流之后，它会在 300ms 后补注入一个 tap 做透传**。
+
+所以这不是"某个 bug 进程"，而是 MIUI 全屏手势的正常仲裁：底部区域归桌面。
+跨进程、且发生在 system_server/桌面的原生代码里，SystemUI 侧 hook 不到
+（模块日志零 `TOKEN_PILFER`、旧 `InputMonitor.pilferPointers` hook 也从未命中，
+正是因为调用方在 com.miui.home 里）。
+
+**运行时确认（一次即可）**：
+
+```powershell
+# 一边录日志一边做一次角滑
+adb logcat -v time | Select-String -Pattern 'GestureInputMonitor|pilfer|redirecting|passthrough|GestureStub'
+# 或者只看 binder：先开 ftrace，再做手势，然后读 trace
+adb shell su -c "echo 1 > /sys/kernel/tracing/events/binder/binder_transaction/enable; echo 1 > /sys/kernel/tracing/tracing_on"
+#   ... 做一次右下角斜滑 ...
+adb shell su -c "echo 0 > /sys/kernel/tracing/tracing_on; cat /sys/kernel/tracing/trace" |
+  Select-String -Pattern 'code=0x3f|code=0x39|code=0x2d'   # 63=pilferPointers 57=cancelCurrentTouch 45=?
+```
+
 即**系统为"底边上滑 = 回桌面"预留的那条带子里，有 SystemUI 之外的进程在 DOWN 后
 ~8ms 把触摸接管走**；它只有在"别人还持有该手势"时才能得手——我们一旦先 pilfer，
 整段日志里再没出现过随后的 CANCEL，这正是快滑能过的原因。所以现在：
 
 - **带内（底边上方 28dp）**：DOWN 当场 `pilferPointers()` 拿下，不再和它抢；
 - **带外**：维持"先观察、过阈值才认领"的透传语义，角落轻点/应用内拖动不受影响；
-- 带内被我们拿下、但最后不是扇子而是**向上滑**时，松手按系统原语义补发
-  `KEYCODE_HOME`（`InputManager.injectInputEvent`，与 `EdgeBackGestureHandler` 自己
-  合成按键的方式一致），避免"拥有角落"把底部上滑回桌面弄坏；日志记
-  `MON_UPWARD_REPLAY_HOME`。（若你想改成补发 BACK 而不是 HOME，改一处常量即可。）
-- 代价：带内（底边 28dp）的**轻点会被吃掉**（这是"拥有 DOWN"的固有代价，也是原版
-  系统手势区的语义）；带外仍然是透传的，触发区滑杆可以进一步缩小范围。
+- 带内被我们拿下、最后不是扇子而是**向上滑**时，按桌面自己的公式
+  （`down_y - current_y > record_area_height` ≈ 本带高度）**在手指还没抬起时就提交**
+  `KEYCODE_HOME`（不再等松手），日志 `MON_UPWARD_REPLAY_HOME`；
+  （若你想改成补发 BACK 而不是 HOME，改一处常量即可。）
+- 带内被拿下、最后判定为**轻点**（位移 ≤ 1.5×slop、时长 ≤ 250ms）时补注入一个 tap
+  还给应用：先等过桌面自己的 300ms 透传窗口，并在自己的监视器流里观察是否出现
+  它注入的 tap（注入事件 `deviceId = -1`），只有它没补才由我们补
+  （`MON_TAP_PASSTHROUGH_DELEGATED` / `MON_TAP_PASSTHROUGH_INJECTED`），因此不会双触发。
 
 
 ## 结构
