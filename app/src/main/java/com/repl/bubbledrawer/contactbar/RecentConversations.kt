@@ -41,6 +41,21 @@ data class Conversation(
  *  - `NotifPipeline.getAllNotifs()` (:128) returns `mNotifCollection.mReadOnlyNotificationSet`
  *    but asserts the main thread, so the field is read directly and the method kept as fallback.
  *  - `NotificationEntry` exposes the key and the `ExpandedNotification` (fields `key`, `mSbn`).
+ *
+ * ## Why the list is REMEMBERED, not just read live (HyperOS-specific)
+ *
+ * MIUI/HyperOS clears an app's notifications as soon as that app is opened — by any route, our
+ * freeform launch included (the logic lives in system_server; `out/SystemUI1703_src` contains no
+ * auto-clear implementation at all). A bar fed purely by the live notification set would therefore
+ * be empty exactly when the small window appears, which is the whole point of the feature. Flyme has
+ * no such behaviour, which is why its original can read the notification list directly
+ * (`C2763k.java:405`).
+ *
+ * So notifications are used as a **discovery channel**: every chat notification upserts a
+ * [Remembered] record (title, avatar, click intent, last post time) that outlives the notification
+ * itself. The bar shows the merge — live first, remembered after — and [TTL_MS] plus the per-app cap
+ * keep a stale chat from living forever. Consequence worth knowing: swiping a notification away no
+ * longer removes an avatar (Flyme's rule); only time and the caps do.
  */
 class RecentConversations(
     private val context: Context,
@@ -55,9 +70,27 @@ class RecentConversations(
     private var cachedAt = 0L
     private var cachedIcons = HashMap<String, Drawable?>()
 
+    /** Conversation memory that survives MIUI's "opening the app clears its notifications". */
+    private class Remembered(
+        val pkg: String,
+        val title: String,
+        var key: String?,
+        var icon: Drawable?,
+        var pendingIntent: PendingIntent?,
+        var postTime: Long,
+        var lastSeenAt: Long,
+    )
+
+    private val remembered = HashMap<String, Remembered>()
+
+    /** Live notifications seen in the last build — diagnostics only. */
+    @Volatile
+    var lastLiveCount = 0
+        private set
+
     /**
-     * Conversations of [pkg], newest first. Empty when the app posted nothing that looks like a
-     * chat (no title / no avatar) — the bar then stays hidden, exactly like Flyme's
+     * Conversations of [pkg], newest first. Empty when the app never posted anything that looks like
+     * a chat (no title / no avatar) — the bar then stays hidden, exactly like Flyme's
      * `m9397W(false)` path.
      */
     fun conversations(pkg: String, force: Boolean = false): List<Conversation> {
@@ -74,21 +107,85 @@ class RecentConversations(
     }
 
     private fun build(pkg: String): List<Conversation> {
-        val entries = allEntries()
-        if (entries.isEmpty()) return emptyList()
-        val out = ArrayList<Conversation>()
-        val keys = HashSet<String>()
-        for (entry in entries) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val live = LinkedHashMap<String, Conversation>()
+        for (entry in allEntries()) {
             val conv = toConversation(entry) ?: continue
-            if (conv.pkg != pkg) continue
+            // Remember every whitelisted app, not just the one in the small window: by the time a
+            // window opens, HyperOS has usually cleared that app's notifications already.
+            remember(conv, now)
             // One avatar per conversation: a chat that re-posts (or a summary line) keeps the
             // newest notification only — Flyme keeps a per-key bucket with the same effect.
-            if (!keys.add(conv.title)) continue
-            out.add(conv)
+            if (conv.pkg == pkg) live[conv.title] = conv
         }
-        out.sortByDescending { it.postTime }
+        lastLiveCount = live.size
+        prune(now)
+        return merge(pkg, live)
+    }
+
+    /**
+     * Snapshot every whitelisted conversation into the memory. Called on every notification event
+     * and once at startup, so the bar has something to show even when the small window is opened
+     * long after the notifications were posted — and after HyperOS cancelled them.
+     */
+    fun observe() {
+        runCatching {
+            val now = android.os.SystemClock.elapsedRealtime()
+            for (entry in allEntries()) {
+                toConversation(entry)?.let { remember(it, now) }
+            }
+            prune(now)
+        }.onFailure { log(Log.WARN, "CONTACT_BAR_OBSERVE_FAILED", it) }
+    }
+
+    private fun remember(conv: Conversation, now: Long) {
+        val record = remembered.getOrPut(key(conv.pkg, conv.title)) {
+            Remembered(conv.pkg, conv.title, null, null, null, 0L, now)
+        }
+        if (conv.icon != null) record.icon = conv.icon
+        if (conv.pendingIntent != null) record.pendingIntent = conv.pendingIntent
+        record.key = conv.key
+        record.postTime = maxOf(record.postTime, conv.postTime)
+        record.lastSeenAt = now
+    }
+
+    /** Memory for [pkg], overlaid with whatever is still posted (live wins: newer avatar/intent). */
+    private fun merge(pkg: String, live: Map<String, Conversation>): List<Conversation> {
+        val merged = LinkedHashMap<String, Conversation>()
+        for (record in remembered.values) {
+            if (record.pkg != pkg) continue
+            merged[record.title] = Conversation(
+                pkg = record.pkg,
+                key = record.key.orEmpty(),
+                title = record.title,
+                icon = record.icon,
+                pendingIntent = record.pendingIntent,
+                postTime = record.postTime,
+            )
+        }
+        merged.putAll(live)
+        val out = merged.values.sortedByDescending { it.postTime }
         return if (out.size > MAX_ITEMS) ArrayList(out.subList(0, MAX_ITEMS)) else out
     }
+
+    /** Drop conversations nobody refreshed for [TTL_MS], then enforce the per-app and global caps. */
+    private fun prune(now: Long) {
+        remembered.values.removeAll { now - it.lastSeenAt > TTL_MS }
+        remembered.values.groupBy { it.pkg }.forEach { (_, list) ->
+            if (list.size > MAX_REMEMBERED_PER_APP) {
+                list.sortedByDescending { it.lastSeenAt }
+                    .drop(MAX_REMEMBERED_PER_APP)
+                    .forEach { remembered.remove(key(it.pkg, it.title)) }
+            }
+        }
+        if (remembered.size <= MAX_REMEMBERED_TOTAL) return
+        remembered.values
+            .sortedByDescending { it.lastSeenAt }
+            .drop(MAX_REMEMBERED_TOTAL)
+            .forEach { remembered.remove(key(it.pkg, it.title)) }
+    }
+
+    private fun key(pkg: String, title: String) = "$pkg|$title"
 
     private fun toConversation(entry: Any): Conversation? {
         val sbn = member(entry, "getSbn", "mSbn") as? StatusBarNotification ?: return null
@@ -97,6 +194,9 @@ class RecentConversations(
         if (pkg !in IM_WHITELIST) return null
         val key = (member(entry, "getKey", "key") as? String) ?: sbn.key ?: return null
         val n: Notification = runCatching { sbn.notification }.getOrNull() ?: return null
+        // Group summaries ("微信 · 3 条新消息") carry the app name, not a person — they would add a
+        // bogus avatar and are exactly what the title gate below is meant to reject.
+        if (runCatching { n.flags and Notification.FLAG_GROUP_SUMMARY != 0 }.getOrDefault(false)) return null
         val title = runCatching {
             n.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim()
         }.getOrNull().orEmpty()
@@ -153,6 +253,17 @@ class RecentConversations(
     companion object {
         private const val TAG = "BubbleDrawer"
         private const val MAX_ITEMS = 20
+
+        /**
+         * How long a conversation stays in the bar after its notification is gone. HyperOS cancels
+         * an app's notifications when the app is opened, so this window is what makes the feature
+         * usable at all: recent chats keep showing, yesterday's don't.
+         */
+        private const val TTL_MS = 12 * 60 * 60 * 1000L
+
+        /** Memory bounds: the bar shows at most 6 avatars, so 12 per app / 60 overall is plenty. */
+        private const val MAX_REMEMBERED_PER_APP = 12
+        private const val MAX_REMEMBERED_TOTAL = 60
 
         /** Flyme's own whitelist (`common/windowmode/model/AbstractC2304a.java:49-53`). */
         val IM_WHITELIST = setOf(
@@ -255,9 +366,14 @@ class RecentConversations(
                 val add = instance.javaClass.methods.firstOrNull {
                     it.name == "addCollectionListener" && it.parameterCount == 1
                 } ?: return
-                val proxy = Proxy.newProxyInstance(listenerClass.classLoader, arrayOf(listenerClass)) { _, method, _ ->
+                val proxy = Proxy.newProxyInstance(listenerClass.classLoader, arrayOf(listenerClass)) { _, method, args ->
                     if (method.name.startsWith("onEntry")) {
                         onChanged?.invoke()
+                        // Diagnostics for the HyperOS behaviour this class exists to survive: when the
+                        // app is opened its notifications are cancelled, so an `onEntryRemoved` burst
+                        // right before the small window appears is expected — the memory keeps the bar
+                        // populated (see the class KDoc).
+                        if (method.name == "onEntryRemoved") logRemoval(args?.firstOrNull())
                     }
                     null
                 }
@@ -273,5 +389,24 @@ class RecentConversations(
             val collection = pipeline.javaClass.getField("mNotifCollection").get(pipeline)
             (collection.javaClass.getField("mReadOnlyNotificationSet").get(collection) as? Collection<*>)?.size ?: 0
         }.getOrDefault(0)
+
+        /** Rate-limited `CONTACT_BAR_NOTIF_REMOVED` line: proof of the clear-on-open behaviour. */
+        @Volatile
+        private var lastRemovalLogAt = 0L
+
+        private fun logRemoval(entry: Any?) {
+            val module = moduleRef ?: return
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - lastRemovalLogAt < 250L) return
+            lastRemovalLogAt = now
+            val sbn = runCatching {
+                (entry?.javaClass?.getField("mSbn")?.get(entry)) as? StatusBarNotification
+            }.getOrNull()
+            val pkg = sbn?.packageName ?: "?"
+            val title = runCatching {
+                sbn?.notification?.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+            }.getOrNull()
+            module.log(Log.INFO, TAG, "CONTACT_BAR_NOTIF_REMOVED pkg=$pkg title=$title", null)
+        }
     }
 }

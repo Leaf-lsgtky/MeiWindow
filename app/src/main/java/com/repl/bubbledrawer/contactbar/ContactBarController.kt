@@ -82,7 +82,17 @@ class ContactBarController(
 
     init {
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
-        RecentConversations.onChanged = { main.post { refreshData(force = true) } }
+        RecentConversations.onChanged = {
+            main.post {
+                // Capture first, then render: HyperOS cancels an app's notifications the moment the
+                // app is opened, so anything not remembered now would never reach the bar.
+                recent.observe()
+                refreshData(force = true)
+            }
+        }
+        // Whatever is already posted when the module loads (install, SystemUI restart) counts as
+        // recent conversations too.
+        main.post { recent.observe() }
     }
 
     // ---------------------------------------------------------------- FreeformObserver
@@ -327,7 +337,11 @@ class ContactBarController(
         val v = view ?: return
         val rect = lastRect ?: return
         v.bind(items, v.capacityFor(rect.width()), fallbackIcon(), ::openConversation)
-        log(Log.INFO, "CONTACT_BAR_DATA pkg=$pkg items=${items.size}")
+        log(
+            Log.INFO,
+            "CONTACT_BAR_DATA pkg=$pkg items=${items.size} live=${recent.lastLiveCount} " +
+                "remembered=${(items.size - recent.lastLiveCount).coerceAtLeast(0)}",
+        )
     }
 
     /** Flyme falls back to the app icon when a notification carries no avatar. */
@@ -348,43 +362,67 @@ class ContactBarController(
      */
     private fun openConversation(conversation: Conversation) {
         val info = task
+        val options = freeformOptions(conversation.pkg, info)
         val pi = conversation.pendingIntent
-        if (pi == null) {
-            logger(Log.WARN, "CONTACT_BAR_OPEN_NO_INTENT pkg=${conversation.pkg}", null)
-            return
-        }
-        val options = runCatching { MiuiFreeform.activityOptions(host, conversation.pkg, noCheck = true) }.getOrNull()
-            ?: runCatching { MiuiFreeform.makeActivityOptions(host, conversation.pkg) }.getOrNull()
-        if (options != null) {
-            val taskId = FreeformTask.taskId(info)
-            if (taskId > 0) {
-                runCatching {
-                    ActivityOptions::class.java
-                        .getMethod("setLaunchTaskId", Int::class.javaPrimitiveType)
-                        .invoke(options, taskId)
+        if (pi != null) {
+            if (options != null) {
+                val sent = runCatching {
+                    pi.send(host, 0, null, null, null, null, options.toBundle())
+                    true
+                }.getOrDefault(false)
+                if (sent) {
+                    log(
+                        Log.INFO,
+                        "CONTACT_BAR_OPEN_OPTIONS pkg=${conversation.pkg} reuseTask=${FreeformTask.taskId(info)} " +
+                            "title=${conversation.title}",
+                    )
+                    return
                 }
             }
-            runCatching { MiuiFreeform.withoutFreeformAnimation(options) }
-            val sent = runCatching {
-                pi.send(host, 0, null, null, null, null, options.toBundle())
-                true
-            }.getOrDefault(false)
-            if (sent) {
+            val plain = runCatching { pi.send(); true }.getOrDefault(false)
+            if (plain) {
                 log(
                     Log.INFO,
-                    "CONTACT_BAR_OPEN_OPTIONS pkg=${conversation.pkg} reuseTask=$taskId " +
-                        "title=${conversation.title}",
+                    "CONTACT_BAR_OPEN_PLAIN pkg=${conversation.pkg} title=${conversation.title}",
                 )
                 return
             }
         }
-        val plain = runCatching { pi.send(); true }.getOrDefault(false)
-        log(
-            Log.INFO,
-            "CONTACT_BAR_OPEN_PLAIN pkg=${conversation.pkg} sent=$plain options=${options != null} " +
-                "title=${conversation.title}",
+        // Remembered conversations survive MIUI's clear-on-open, and their PendingIntent may have
+        // gone stale in the meantime (WeChat re-creates them per notification). Degrade to opening
+        // the app itself in the same small window instead of doing nothing.
+        val launched = openAppInCurrentWindow(conversation.pkg, options)
+        logger(
+            Log.WARN,
+            "CONTACT_BAR_OPEN_FALLBACK pkg=${conversation.pkg} title=${conversation.title} " +
+                "staleIntent=${pi != null} launched=$launched",
+            null,
         )
     }
+
+    /** MIUI freeform launch options pinned to the window we are attached to. */
+    private fun freeformOptions(pkg: String, info: Any?): ActivityOptions? {
+        val options = runCatching { MiuiFreeform.activityOptions(host, pkg, noCheck = true) }.getOrNull()
+            ?: runCatching { MiuiFreeform.makeActivityOptions(host, pkg) }.getOrNull()
+            ?: return null
+        val taskId = FreeformTask.taskId(info)
+        if (taskId > 0) {
+            runCatching {
+                ActivityOptions::class.java
+                    .getMethod("setLaunchTaskId", Int::class.javaPrimitiveType)
+                    .invoke(options, taskId)
+            }
+        }
+        return runCatching { MiuiFreeform.withoutFreeformAnimation(options) }.getOrDefault(options)
+    }
+
+    private fun openAppInCurrentWindow(pkg: String, options: ActivityOptions?): Boolean = runCatching {
+        val intent = host.packageManager.getLaunchIntentForPackage(pkg)
+            ?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            ?: return false
+        if (options != null) host.startActivity(intent, options.toBundle()) else host.startActivity(intent)
+        true
+    }.getOrDefault(false)
 
     // ---------------------------------------------------------------- lifecycle
 
