@@ -93,26 +93,56 @@ class FanHost(
     @Volatile
     private var pinsOverlay: String? = null
 
+    // SystemUI-local persistent SharedPreferences: guaranteed to survive SystemUI reboots
+    private val storageContext: Context =
+        if (host.isDeviceProtectedStorage) host
+        else runCatching { host.createDeviceProtectedStorageContext() }.getOrDefault(host)
+
+    private val sysUiPrefs: SharedPreferences =
+        storageContext.getSharedPreferences("bubbledrawer_pins", Context.MODE_PRIVATE)
+
     private val pinStore = PinStore(object : PinBackend {
-        override fun read(): String =
-            pinsOverlay ?: prefs.getString(PrefsPinBackend.KEY, "").orEmpty()
+        override fun read(): String {
+            pinsOverlay?.let { return it }
+            if (sysUiPrefs.contains(PrefsPinBackend.KEY)) {
+                return sysUiPrefs.getString(PrefsPinBackend.KEY, "").orEmpty()
+            }
+            if (prefs.contains(PrefsPinBackend.KEY)) {
+                val remoteStored = prefs.getString(PrefsPinBackend.KEY, "").orEmpty()
+                if (remoteStored.isNotEmpty()) {
+                    sysUiPrefs.edit().putString(PrefsPinBackend.KEY, remoteStored).commit()
+                }
+                return remoteStored
+            }
+            return ""
+        }
 
         override fun write(value: String) {
             pinsOverlay = value
-            val delivered = runCatching {
-                val intent = android.content.Intent(PinSyncService.ACTION)
-                    .setPackage(context.packageName.takeIf { it.startsWith("com.repl.bubbledrawer") }
-                        ?: "com.repl.bubbledrawer")
+            // 1. Immediately persist inside SystemUI's own storage
+            sysUiPrefs.edit().putString(PrefsPinBackend.KEY, value).commit()
+
+            // 2. Broadcast to module app so App's offline cfg and LSPosed remote group are updated
+            val deliveredBroadcast = runCatching {
+                val intent = Intent(PinSyncReceiver.ACTION)
+                    .setClassName(ModuleResources.MODULE_PACKAGE, "com.repl.bubbledrawer.xposed.PinSyncReceiver")
+                    .putExtra(PinSyncReceiver.EXTRA_PINS, value)
+                host.sendBroadcast(intent)
+                true
+            }.getOrDefault(false)
+
+            // 3. Fallback startService attempt
+            val deliveredService = runCatching {
+                val intent = Intent(PinSyncService.ACTION)
+                    .setClassName(ModuleResources.MODULE_PACKAGE, "com.repl.bubbledrawer.xposed.PinSyncService")
                     .putExtra(PinSyncService.EXTRA_PINS, value)
-                // SystemUI identity (FanContext keeps the SystemUI package), so this is a
-                // system-uid startService: allowed to target an exported component of any
-                // app, running or not.
                 context.startService(intent)
                 true
             }.getOrDefault(false)
+
             logger(
-                if (delivered) Log.INFO else Log.WARN,
-                "PIN_WRITE_HANDOFF delivered=$delivered valueLen=${value.length}",
+                if (deliveredBroadcast || deliveredService) Log.INFO else Log.WARN,
+                "PIN_WRITE_HANDOFF broadcast=$deliveredBroadcast service=$deliveredService valueLen=${value.length}",
                 null,
             )
         }
@@ -138,6 +168,7 @@ class FanHost(
     private val timeout = Runnable { if (dock.isBusy) retract("TIMEOUT") }
     private var screenOffReceiver: android.content.BroadcastReceiver? = null
     private var pinsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private var syncFromAppReceiver: android.content.BroadcastReceiver? = null
 
     private val scope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob(),
@@ -159,12 +190,46 @@ class FanHost(
         }
         // pins edits while the fan is open → live rebind (reference :85-96 watch pattern)
         pinsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == PrefsPinBackend.KEY || key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP) {
+            if (key == PrefsPinBackend.KEY) {
+                val remoteVal = prefs.getString(PrefsPinBackend.KEY, null)
+                if (remoteVal != null) {
+                    sysUiPrefs.edit().putString(PrefsPinBackend.KEY, remoteVal).commit()
+                    pinsOverlay = remoteVal
+                }
+                val snap = RemotePrefs.read(prefs)
+                mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp) }
+            } else if (key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP) {
                 val snap = RemotePrefs.read(prefs)
                 mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp) }
             }
         }
         runCatching { prefs.registerOnSharedPreferenceChangeListener(pinsListener) }
+
+        // Direct broadcast receiver from App (e.g. PinManageActivity in settings app)
+        val syncFromApp = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                val raw = intent?.getStringExtra(PinSyncReceiver.EXTRA_PINS) ?: return
+                if (PinSyncReceiver.isPlausiblePinsValue(raw)) {
+                    sysUiPrefs.edit().putString(PrefsPinBackend.KEY, raw).commit()
+                    pinsOverlay = raw
+                    val snap = RemotePrefs.read(prefs)
+                    mainHandler.post {
+                        if (dock.isBusy) {
+                            dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp)
+                        }
+                    }
+                    logger(Log.INFO, "PIN_SYNC_FROM_APP_APPLIED len=${raw.length}", null)
+                }
+            }
+        }
+        runCatching {
+            host.registerReceiver(
+                syncFromApp,
+                IntentFilter(PinSyncReceiver.ACTION_TO_SYSTEMUI),
+                Context.RECEIVER_EXPORTED,
+            )
+        }.onSuccess { syncFromAppReceiver = syncFromApp }
+
         // SCREEN_OFF → retract (original mo864f :1049-1056 → m9254Z)
         val r = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: Context?, i: Intent?) {
@@ -591,6 +656,8 @@ class FanHost(
     fun destroy() {
         screenOffReceiver?.let { runCatching { host.unregisterReceiver(it) } }
         screenOffReceiver = null
+        syncFromAppReceiver?.let { runCatching { host.unregisterReceiver(it) } }
+        syncFromAppReceiver = null
         pinsListener?.let { runCatching { prefs.unregisterOnSharedPreferenceChangeListener(it) } }
         pinsListener = null
         mainHandler.removeCallbacks(timeout)

@@ -59,17 +59,7 @@ class PinSyncService : Service() {
         /** "pkg#user;…" for ~100 pins is < 5 KB; 10 KB is a generous cap. */
         private const val MAX_VALUE_LEN = 10_000
 
-        /**
-         * Grammar check for the encoded pin string: `pkg#user;pkg#user;…` (PinCodec
-         * format). Empty = "no pins", which is legal (manage mode removes everything).
-         */
-        private fun isPlausiblePinsValue(raw: String): Boolean {
-            if (raw.isEmpty()) return true
-            if (raw.length > MAX_VALUE_LEN) return false
-            return raw.split(';').all { entry ->
-                entry.isNotEmpty() && entry.length <= 512 &&
-                    entry.substringBefore('#').let { it.isNotEmpty() && it.none { c -> c == '#' || c == ';' } }
-            }
-        }
+        private fun isPlausiblePinsValue(raw: String): Boolean =
+            PinSyncReceiver.isPlausiblePinsValue(raw)
     }
 }

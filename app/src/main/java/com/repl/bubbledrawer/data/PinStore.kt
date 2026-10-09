@@ -24,7 +24,9 @@ interface PinBackend {
 
 class PrefsPinBackend(private val prefs: android.content.SharedPreferences) : PinBackend {
     override fun read(): String = prefs.getString(KEY, "").orEmpty()
-    override fun write(value: String) = prefs.edit().putString(KEY, value).apply()
+    override fun write(value: String) {
+        prefs.edit().putString(KEY, value).commit()
+    }
     companion object { const val KEY = "long_press_app" } // same key name as the original Global setting
 }
 

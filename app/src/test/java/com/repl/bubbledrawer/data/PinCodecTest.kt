@@ -27,4 +27,12 @@ class PinCodecTest {
         // store applies the cap; codec itself is lossless, cap via take()
         assertEquals(6, many.take(PinCodec.MAX_PINS).size)
     }
+
+    @Test
+    fun plausiblePinsValidation() {
+        org.junit.Assert.assertTrue(com.repl.bubbledrawer.xposed.PinSyncReceiver.isPlausiblePinsValue(""))
+        org.junit.Assert.assertTrue(com.repl.bubbledrawer.xposed.PinSyncReceiver.isPlausiblePinsValue("com.tencent.mm#0"))
+        org.junit.Assert.assertTrue(com.repl.bubbledrawer.xposed.PinSyncReceiver.isPlausiblePinsValue("com.tencent.mm#0;com.tencent.mobileqq#999;"))
+        org.junit.Assert.assertFalse(com.repl.bubbledrawer.xposed.PinSyncReceiver.isPlausiblePinsValue("#0;com.bad"))
+    }
 }

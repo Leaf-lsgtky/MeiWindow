@@ -97,7 +97,13 @@ object RemoteBridge {
             boundService = service
             remote = prefs
             frameworkLabel = runCatching { "${service.frameworkName} ${service.frameworkVersion}" }.getOrNull()
-            Log.i("BubbleDrawer", "BRIDGE_CONNECTED " + (frameworkLabel ?: ""))
+            val localPrefs = local(context)
+            val key = com.repl.bubbledrawer.data.PrefsPinBackend.KEY
+            val localPins = localPrefs.getString(key, null)
+            val remotePins = prefs.getString(key, null)
+            if (localPins.isNullOrEmpty() && !remotePins.isNullOrEmpty()) {
+                localPrefs.edit().putString(key, remotePins).commit()
+            }
             migrateLegacyPins(context, prefs)
             syncLocal(context) // always re-push local truth; keeps remote consistent after reboot
             notifyConnection(true)
@@ -106,21 +112,32 @@ object RemoteBridge {
         }
     }
 
-    /** One-time move of the old app-private "pins" file into the shared group. */
+    /** One-time move of the old app-private "pins" or local "cfg" into the shared group. */
     private fun migrateLegacyPins(context: Context, prefs: SharedPreferences) {
         val key = com.repl.bubbledrawer.data.PrefsPinBackend.KEY
-        if (prefs.contains(key)) return
+        val localCfg = local(context).getString(key, null)
+        if (!localCfg.isNullOrEmpty()) {
+            if (!prefs.contains(key) || prefs.getString(key, null).isNullOrEmpty()) {
+                prefs.edit().putString(key, localCfg).commit()
+            }
+            return
+        }
         val legacy = context.getSharedPreferences("pins", Context.MODE_PRIVATE)
-            .getString(key, "").orEmpty()
-        if (legacy.isNotEmpty()) prefs.edit().putString(key, legacy).apply()
+            .getString(key, null)
+        if (!legacy.isNullOrEmpty()) {
+            local(context).edit().putString(key, legacy).commit()
+            prefs.edit().putString(key, legacy).commit()
+        }
     }
 
     /** Push ALL local settings keys into the remote group (local file uses the
      *  same key names as RemotePrefs — see SettingsStore). */
     fun syncLocal(context: Context) {
         val target = remote ?: return
-        val snap = RemotePrefs.read(local(context))
-        target.edit()
+        val localPrefs = local(context)
+        val snap = RemotePrefs.read(localPrefs)
+        val localPins = localPrefs.getString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, null)
+        val editor = target.edit()
             .putBoolean(RemotePrefs.KEY_ENABLED, snap.enabled)
             .putBoolean(RemotePrefs.KEY_LEFT, snap.left)
             .putBoolean(RemotePrefs.KEY_RIGHT, snap.right)
@@ -135,11 +152,14 @@ object RemoteBridge {
             .putInt(RemotePrefs.KEY_FAN_ICON_COUNT, snap.fanIconCount)
             .putInt(RemotePrefs.KEY_FAN_RADIUS_DP, snap.fanRadiusDp)
             .putInt(RemotePrefs.KEY_PANEL_DISMISS_OUTSIDE, snap.panelDismissOutside)
-            .commit() // synchronous: LSPosed mirrors the group only after the write lands
+        if (localPins != null) {
+            editor.putString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, localPins)
+        }
+        editor.commit() // synchronous: LSPosed mirrors the group only after the write lands
         Log.i(
             "BubbleDrawer",
             "BRIDGE_PUSHED enabled=" + snap.enabled + " left=" + snap.left +
-                " right=" + snap.right + " range=" + snap.rangeDp,
+                " right=" + snap.right + " range=" + snap.rangeDp + " pinsLen=" + (localPins?.length ?: 0),
         )
         if (!target.contains(com.repl.bubbledrawer.data.PrefsPinBackend.KEY)) {
             migrateLegacyPins(context, target)

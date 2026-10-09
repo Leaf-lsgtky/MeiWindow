@@ -45,5 +45,13 @@
                 <action android:name="com.repl.bubbledrawer.action.SYNC_PINS" />
             </intent-filter>
         </service>
+
+        <receiver
+            android:name=".xposed.PinSyncReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.repl.bubbledrawer.action.SYNC_PINS" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

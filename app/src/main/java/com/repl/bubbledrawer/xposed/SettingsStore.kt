@@ -120,14 +120,32 @@ object SettingsStore {
      *  go to BOTH so the offline cache never diverges (syncLocal re-pushes). */
     fun pinBackend(context: Context): PinBackend = object : PinBackend {
         override fun read(): String {
+            val localPins = fallbackMirror(context).getString(PrefsPinBackend.KEY, null)
+            if (!localPins.isNullOrEmpty()) return localPins
             val r = RemoteBridge.remote
-            if (r != null) return PrefsPinBackend(r).read()
-            return PrefsPinBackend(fallbackMirror(context)).read()
+            if (r != null) {
+                val remotePins = PrefsPinBackend(r).read()
+                if (remotePins.isNotEmpty()) {
+                    fallbackMirror(context).edit().putString(PrefsPinBackend.KEY, remotePins).commit()
+                    return remotePins
+                }
+            }
+            return ""
         }
 
         override fun write(value: String) {
-            PrefsPinBackend(fallbackMirror(context)).write(value)
-            RemoteBridge.remote?.let { PrefsPinBackend(it).write(value) }
+            fallbackMirror(context).edit().putString(PrefsPinBackend.KEY, value).commit()
+            val r = RemoteBridge.remote
+            if (r != null) {
+                r.edit().putString(PrefsPinBackend.KEY, value).commit()
+            } else {
+                RemoteBridge.start(context)
+            }
+            runCatching {
+                val intent = android.content.Intent(PinSyncReceiver.ACTION_TO_SYSTEMUI)
+                    .putExtra(PinSyncReceiver.EXTRA_PINS, value)
+                context.sendBroadcast(intent)
+            }
         }
     }
 
