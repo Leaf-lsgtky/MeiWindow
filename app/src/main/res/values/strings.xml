@@ -41,6 +41,12 @@
     <string name="fan_radius">展开扇形半径</string>
     <string name="fan_auto_fill_recommend">自动填满推荐应用</string>
     <string name="fan_auto_fill_recommend_summary">收藏数量未达到扇形容量时，自动根据预测算法填满剩余位置</string>
+    <string name="fan_pressure_page_turn">气压重按翻页</string>
+    <string name="fan_pressure_page_turn_summary">在扇形空白处用力按压屏幕切换下一批应用（停留在图标或更多上时不触发）</string>
+    <string name="fan_pressure_sensitivity">重按灵敏度</string>
+    <string name="fan_pressure_sensitivity_standard">标准 (1.2 hPa)</string>
+    <string name="fan_pressure_sensitivity_sensitive">灵敏 (0.8 hPa)</string>
+    <string name="fan_pressure_sensitivity_heavy">较重 (1.8 hPa)</string>
     <string name="preview_trigger_zone">预览触发区域</string>
     <string name="preview_zone_title">触发区域预览</string>
     <string name="preview_zone_dims">沿底边 %1$d dp · 沿侧边 %2$d dp</string>

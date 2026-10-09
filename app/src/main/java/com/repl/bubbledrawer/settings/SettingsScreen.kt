@@ -324,6 +324,28 @@ fun FanSettingsScreen(
                         )
                     })
                     add(CardItem("hint") { SliderHintRow(stringResource(R.string.fan_auto_fill_recommend_summary)) })
+                    add(CardItem("pressure_page_turn") {
+                        SwitchRow(
+                            title = stringResource(R.string.fan_pressure_page_turn),
+                            checked = snap.fanPressurePageTurn,
+                            onCheckedChange = actions::setFanPressurePageTurn,
+                        )
+                    })
+                    if (snap.fanPressurePageTurn) {
+                        add(CardItem("pressure_sensitivity") {
+                            DropdownRow(
+                                title = stringResource(R.string.fan_pressure_sensitivity),
+                                items = listOf(
+                                    stringResource(R.string.fan_pressure_sensitivity_standard),
+                                    stringResource(R.string.fan_pressure_sensitivity_sensitive),
+                                    stringResource(R.string.fan_pressure_sensitivity_heavy),
+                                ),
+                                selectedIndex = snap.fanPressureSensitivity.coerceIn(0, 2),
+                                onSelect = actions::setFanPressureSensitivity,
+                            )
+                        })
+                    }
+                    add(CardItem("pressure_hint") { SliderHintRow(stringResource(R.string.fan_pressure_page_turn_summary)) })
                 },
             )
 

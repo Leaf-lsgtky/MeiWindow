@@ -24,6 +24,8 @@ interface SettingsActions {
     fun setFanIconCount(count: Int)
     fun setFanRadiusDp(dp: Int)
     fun setFanAutoFillRecommend(enabled: Boolean)
+    fun setFanPressurePageTurn(enabled: Boolean)
+    fun setFanPressureSensitivity(sensitivity: Int)
     fun setRecommendEnabled(enabled: Boolean)
     fun setRecommendCount(count: Int)
     fun openManage(context: Context)
@@ -45,6 +47,8 @@ class StoreSettingsActions(private val context: Context) : SettingsActions {
     override fun setFanIconCount(count: Int) = SettingsStore.setFanIconCount(context, count)
     override fun setFanRadiusDp(dp: Int) = SettingsStore.setFanRadiusDp(context, dp)
     override fun setFanAutoFillRecommend(enabled: Boolean) = SettingsStore.setFanAutoFillRecommend(context, enabled)
+    override fun setFanPressurePageTurn(enabled: Boolean) = SettingsStore.setFanPressurePageTurn(context, enabled)
+    override fun setFanPressureSensitivity(sensitivity: Int) = SettingsStore.setFanPressureSensitivity(context, sensitivity)
     override fun setRecommendEnabled(enabled: Boolean) = SettingsStore.setRecommendEnabled(context, enabled)
     override fun setRecommendCount(count: Int) = SettingsStore.setRecommendCount(context, count)
     override fun openManage(context: Context) {

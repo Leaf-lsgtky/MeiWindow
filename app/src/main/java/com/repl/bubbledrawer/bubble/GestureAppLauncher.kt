@@ -77,6 +77,11 @@ class GestureAppLauncher @JvmOverloads constructor(
     var state = 0                                                // f10708u
         private set
 
+    val isHoveringItem: Boolean get() = hoveredIndex != -1
+    val currentHoveredIndex: Int get() = hoveredIndex
+
+    private var pageTurnAnimator: ValueAnimator? = null
+
     // ---------------- adapter (C2937F "SlideGestureAdapter" analog) ----------------
 
     sealed class AdapterItem {
@@ -157,6 +162,69 @@ class GestureAppLauncher @JvmOverloads constructor(
     fun setCallback(cb: Callback?) { callback = cb }           // :892-897
     fun getAdapter(): SlideAdapter? = adapter                  // :689-691
 
+    /** Switches to a new adapter (e.g. for page flipping) and smoothly animates children in. */
+    fun switchToAdapter(a: SlideAdapter, animated: Boolean = true) {
+        if (hoveredIndex != -1) {
+            unhover(hoveredIndex)
+            hoveredIndex = -1
+        }
+        removeAllViews()
+        adapter = a
+        val n = a.count
+        for (i in 0 until n) {
+            val v = a.getView(i, this)
+            addView(v)
+            (v.layoutParams as LayoutParams).angle = angleFor(i, n)
+        }
+        if (measuredWidth > 0 && measuredHeight > 0) {
+            val wSpec = MeasureSpec.makeMeasureSpec(measuredWidth, MeasureSpec.EXACTLY)
+            val hSpec = MeasureSpec.makeMeasureSpec(measuredHeight, MeasureSpec.EXACTLY)
+            measureChildren(wSpec, hSpec)
+            layoutChildren()
+            if (animated && state == 2) {
+                playPageTurnAnimation()
+            }
+        } else {
+            requestLayout()
+        }
+    }
+
+    private fun layoutChildren() {
+        val w = measuredWidth
+        for (i in 0 until childCount) {
+            val child = getChildAt(i)
+            val lp = child.layoutParams as LayoutParams
+            val rad = Math.toRadians(lp.angle.toDouble())
+            val px = if (side == 0) sin(rad) * radius else w - sin(rad) * radius
+            val py = centerY - cos(rad) * radius
+            val left = (px - child.measuredWidth / 2.0).roundToInt()
+            val top = (py - child.measuredHeight / 2.0).roundToInt()
+            lp.radiusMin = radius - child.measuredWidth / 2f
+            lp.radiusMax = radius + child.measuredWidth / 2f + touchSlop
+            child.layout(left, top, left + child.measuredWidth, top + child.measuredHeight)
+        }
+    }
+
+    private fun playPageTurnAnimation() {
+        pageTurnAnimator?.cancel()
+        val anim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 160L
+            interpolator = android.view.animation.OvershootInterpolator(1.15f)
+            addUpdateListener { va ->
+                val p = va.animatedValue as Float
+                val scale = 0.7f + 0.3f * p
+                val a = 0.3f + 0.7f * p
+                forEachChild { child ->
+                    child.scaleX = scale
+                    child.scaleY = scale
+                    child.alpha = a
+                }
+            }
+        }
+        pageTurnAnimator = anim
+        anim.start()
+    }
+
     // ---------------- measure / layout ----------------
 
     override fun onMeasure(widthSpec: Int, heightSpec: Int) {
@@ -172,19 +240,7 @@ class GestureAppLauncher @JvmOverloads constructor(
             centerY = measuredHeight.toFloat() // :771-773
         }
         if (centerY == -1f) return             // :774-776
-        val w = measuredWidth
-        for (i in 0 until childCount) {
-            val child = getChildAt(i)
-            val lp = child.layoutParams as LayoutParams
-            val rad = Math.toRadians(lp.angle.toDouble())
-            val px = if (side == 0) sin(rad) * radius else w - sin(rad) * radius // :782
-            val py = centerY - cos(rad) * radius                                   // :783
-            val left = (px - child.measuredWidth / 2.0).roundToInt()               // :784-785
-            val top = (py - child.measuredHeight / 2.0).roundToInt()
-            lp.radiusMin = radius - child.measuredWidth / 2f                       // :788
-            lp.radiusMax = radius + child.measuredWidth / 2f + touchSlop            // :789
-            child.layout(left, top, left + child.measuredWidth, top + child.measuredHeight) // :790
-        }
+        layoutChildren()
         laidOut = true                  // :792
         if (state == 0) playExpand()    // :793-795
     }
@@ -202,6 +258,7 @@ class GestureAppLauncher @JvmOverloads constructor(
     // ---------------- expand (m9714B :460-504) ----------------
 
     private fun playExpand() {
+        pageTurnAnimator?.cancel()
         cachedTops = ArrayList()   // :461 fresh lists each start — the jitter channels
         cachedLefts = ArrayList()  // :462 run BEFORE they fill, hence no-op reads guarded below
         if (centerY == -1f) alpha = 0f   // cold start from hidden: original window begins at
@@ -312,6 +369,7 @@ class GestureAppLauncher @JvmOverloads constructor(
     // ---------------- collapse (m9713A :417-457), all j=100; #5-7 delay 100 ----------------
 
     private fun playCollapse() {
+        pageTurnAnimator?.cancel()
         pendingRetract = false                              // :418
         var set = collapseSet
         if (set == null) {

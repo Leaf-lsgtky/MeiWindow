@@ -96,6 +96,20 @@ object RemotePrefs {
     const val KEY_FAN_AUTO_FILL_RECOMMEND = "fan_auto_fill_recommend"
     const val DEFAULT_FAN_AUTO_FILL_RECOMMEND = false
 
+    /** 扇形应用重按翻页（默认开启） */
+    const val KEY_FAN_PRESSURE_PAGE_TURN = "fan_pressure_page_turn"
+    const val DEFAULT_FAN_PRESSURE_PAGE_TURN = true
+
+    /** 扇形重按灵敏度（0: 标准 1.2hPa, 1: 灵敏 0.8hPa, 2: 较重 1.8hPa） */
+    const val KEY_FAN_PRESSURE_SENSITIVITY = "fan_pressure_sensitivity"
+    const val DEFAULT_FAN_PRESSURE_SENSITIVITY = 0
+
+    fun sensitivityToThreshold(sensitivity: Int): Float = when (sensitivity) {
+        1 -> 0.8f
+        2 -> 1.8f
+        else -> 1.2f
+    }
+
     /** 更多面板推荐应用开关与显示数量（4个为一组，最多20个） */
     const val KEY_RECOMMEND_ENABLED = "recommend_enabled"
     const val KEY_RECOMMEND_COUNT = "recommend_count"
@@ -128,6 +142,9 @@ object RemotePrefs {
         val fanRadiusDp: Int = DEFAULT_FAN_RADIUS_DP,
         /** 扇形未摆满时用推荐应用填满 */
         val fanAutoFillRecommend: Boolean = DEFAULT_FAN_AUTO_FILL_RECOMMEND,
+        /** 扇形重按翻页开关与灵敏度 */
+        val fanPressurePageTurn: Boolean = DEFAULT_FAN_PRESSURE_PAGE_TURN,
+        val fanPressureSensitivity: Int = DEFAULT_FAN_PRESSURE_SENSITIVITY,
         /** 推荐应用开关与显示数量（4, 8, 12, 16, 20） */
         val recommendEnabled: Boolean = DEFAULT_RECOMMEND_ENABLED,
         val recommendCount: Int = DEFAULT_RECOMMEND_COUNT,
@@ -167,6 +184,8 @@ object RemotePrefs {
             fanIconCount = sp.getInt(KEY_FAN_ICON_COUNT, DEFAULT_FAN_ICON_COUNT).coerceIn(5, 6),
             fanRadiusDp = sp.getInt(KEY_FAN_RADIUS_DP, DEFAULT_FAN_RADIUS_DP).let { if (it <= 0) DEFAULT_FAN_RADIUS_DP else it.coerceIn(FAN_RADIUS_MIN, FAN_RADIUS_MAX) },
             fanAutoFillRecommend = sp.getBoolean(KEY_FAN_AUTO_FILL_RECOMMEND, DEFAULT_FAN_AUTO_FILL_RECOMMEND),
+            fanPressurePageTurn = sp.getBoolean(KEY_FAN_PRESSURE_PAGE_TURN, DEFAULT_FAN_PRESSURE_PAGE_TURN),
+            fanPressureSensitivity = sp.getInt(KEY_FAN_PRESSURE_SENSITIVITY, DEFAULT_FAN_PRESSURE_SENSITIVITY).coerceIn(0, 2),
             recommendEnabled = sp.getBoolean(KEY_RECOMMEND_ENABLED, DEFAULT_RECOMMEND_ENABLED),
             recommendCount = snappedRecCount,
             pins = sp.getString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, "").orEmpty(),

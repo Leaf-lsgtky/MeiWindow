@@ -110,11 +110,38 @@ class BubbleDockController(
         }
     }
 
+    var currentPage = 0
+        private set
+    var totalPages = 1
+        private set
+    private var pages: List<List<GestureAppLauncher.AdapterItem>> = emptyList()
+
+    fun resetPage() {
+        currentPage = 0
+    }
+
+    fun nextPage(): Boolean {
+        if (pages.size <= 1) return false
+        currentPage = (currentPage + 1) % pages.size
+        val items = pages[currentPage]
+        launcher.switchToAdapter(
+            GestureAppLauncher.SlideAdapter(items) { item, index ->
+                viewFactory?.create(item, index) ?: itemView(item)
+            },
+            animated = true,
+        )
+        return true
+    }
+
     /** @param screenH full-screen height in px (the launcher window is MATCH_PARENT). */
     fun show(corner: Corner, screenW: Int, screenH: Int, maxApps: Int = 6, radiusDp: Int = 0, autoFillRecommend: Boolean = false) {
+        currentPage = 0
+        pages = buildPages(maxApps, autoFillRecommend)
+        totalPages = pages.size
+        val items = pages.firstOrNull() ?: listOf(GestureAppLauncher.AdapterItem.More)
         val side = if (corner == Corner.BOTTOM_RIGHT || corner == Corner.SIDE_RIGHT) 1 else 0
         launcher.setAdapter(
-            GestureAppLauncher.SlideAdapter(buildItems(maxApps, autoFillRecommend)) { item, index ->
+            GestureAppLauncher.SlideAdapter(items) { item, index ->
                 viewFactory?.create(item, index) ?: itemView(item)
             },
         )
@@ -145,34 +172,73 @@ class BubbleDockController(
         return id > 0 && context.resources.getDimensionPixelSize(id) > 0
     }
 
-    /** m9235C (:447-463): first maxApps pins (5 or 6), then the "更多" tile. If [autoFillRecommend] is true, fills remainder with recommendations. */
-    private fun buildItems(maxApps: Int, autoFillRecommend: Boolean): List<GestureAppLauncher.AdapterItem> {
+    /**
+     * Builds pages of candidate apps.
+     * Sequences:
+     * 1. Pinned apps
+     * 2. Recommended apps
+     * Wraps each batch of [maxApps] items with a trailing "更多" tile.
+     */
+    fun buildPages(maxApps: Int, autoFillRecommend: Boolean): List<List<GestureAppLauncher.AdapterItem>> {
         val all = repo.cachedAll()
-        val out = ArrayList<GestureAppLauncher.AdapterItem>()
+        val pinnedApps = ArrayList<com.repl.bubbledrawer.pinyin.BubbleApp>()
         val pinnedKeys = HashSet<String>()
         for (ref in pinStore.pins()) {
-            if (out.size >= maxApps) break // user selected 5 or 6
             val app = all.firstOrNull { it.packageName == ref.packageName && it.userId == ref.userId }
                 ?: repo.findApp(ref.packageName, ref.userId)
             if (app != null) {
-                out.add(GestureAppLauncher.AdapterItem.AppItem(app))
+                pinnedApps.add(app)
                 pinnedKeys.add("${app.packageName}#${app.userId}")
             }
         }
 
-        if (autoFillRecommend && out.size < maxApps) {
-            val needed = maxApps - out.size
-            val recommendations = com.repl.bubbledrawer.data.predict.AppPredictor.getRecommendations(
-                context, all, pinnedKeys, needed,
-            )
-            for (rec in recommendations) {
-                out.add(GestureAppLauncher.AdapterItem.AppItem(rec))
-                if (out.size >= maxApps) break
-            }
+        val recCount = maxOf(15, maxApps * 3)
+        val recommendations = com.repl.bubbledrawer.data.predict.AppPredictor.getRecommendations(
+            context, all, pinnedKeys, recCount,
+        )
+
+        val resultPages = ArrayList<List<GestureAppLauncher.AdapterItem>>()
+
+        if (pinnedApps.isEmpty() && recommendations.isEmpty()) {
+            resultPages.add(listOf(GestureAppLauncher.AdapterItem.More))
+            return resultPages
         }
 
-        out.add(GestureAppLauncher.AdapterItem.More) // :460-461 more tile (icon_gesture_more_app)
-        return out
+        if (pinnedApps.isEmpty()) {
+            var idx = 0
+            while (idx < recommendations.size) {
+                val chunk = recommendations.subList(idx, minOf(idx + maxApps, recommendations.size))
+                resultPages.add(chunk.map { GestureAppLauncher.AdapterItem.AppItem(it) } + GestureAppLauncher.AdapterItem.More)
+                idx += maxApps
+            }
+            return resultPages
+        }
+
+        if (!autoFillRecommend && pinnedApps.size <= maxApps) {
+            // First page contains only the pinned apps without filling
+            resultPages.add(pinnedApps.map { GestureAppLauncher.AdapterItem.AppItem(it) } + GestureAppLauncher.AdapterItem.More)
+            // Subsequent pages contain recommendations
+            var rIdx = 0
+            while (rIdx < recommendations.size) {
+                val chunk = recommendations.subList(rIdx, minOf(rIdx + maxApps, recommendations.size))
+                resultPages.add(chunk.map { GestureAppLauncher.AdapterItem.AppItem(it) } + GestureAppLauncher.AdapterItem.More)
+                rIdx += maxApps
+            }
+            return resultPages
+        }
+
+        // Pinned apps + recommendations combined pool
+        val pool = ArrayList<com.repl.bubbledrawer.pinyin.BubbleApp>()
+        pool.addAll(pinnedApps)
+        pool.addAll(recommendations)
+
+        var idx = 0
+        while (idx < pool.size) {
+            val chunk = pool.subList(idx, minOf(idx + maxApps, pool.size))
+            resultPages.add(chunk.map { GestureAppLauncher.AdapterItem.AppItem(it) } + GestureAppLauncher.AdapterItem.More)
+            idx += maxApps
+        }
+        return resultPages
     }
 
     /** Inflates the verbatim port of slide_gesture_list_item.xml. */

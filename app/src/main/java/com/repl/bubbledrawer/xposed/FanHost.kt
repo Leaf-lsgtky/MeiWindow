@@ -23,10 +23,14 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import com.repl.bubbledrawer.R
 import com.repl.bubbledrawer.bubble.BubbleDockController
+import com.repl.bubbledrawer.bubble.FanPressureDetector
 import com.repl.bubbledrawer.bubble.GestureAppLauncher
 import com.repl.bubbledrawer.bubble.SlideGestureItemView
 import com.repl.bubbledrawer.data.AppRepository
 import com.repl.bubbledrawer.data.LaunchCountStore
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import com.repl.bubbledrawer.data.PinBackend
 import com.repl.bubbledrawer.data.PinStore
 import com.repl.bubbledrawer.data.PrefsPinBackend
@@ -161,6 +165,10 @@ class FanHost(
 
     private val dock = BubbleDockController(context, repo, pinStore, strategy, itemFactory)
 
+    private val pressureDetector = FanPressureDetector(host) {
+        onHeavyPressTriggered()
+    }
+
     private var scrim: View? = null
     private var canvas: FrameLayout? = null
     private var fanWindowsUp = false
@@ -176,6 +184,9 @@ class FanHost(
 
     init {
         if (moduleContext == null) logger(Log.ERROR, "FAN_MODULE_CONTEXT_FAILED", null)
+        val initialSnap = RemotePrefs.read(prefs)
+        pressureDetector.isEnabled = initialSnap.fanPressurePageTurn
+        pressureDetector.thresholdHpa = RemotePrefs.sensitivityToThreshold(initialSnap.fanPressureSensitivity)
         dock.onShownChanged = { shown -> if (!shown) fadeOutFanWindows() }
         // 更多 tile → overlay panel instead of the full-screen Activity (方案 B)
         dock.onMoreRequested = { showMorePanel() }
@@ -201,6 +212,10 @@ class FanHost(
             } else if (key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP || key == RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND) {
                 val snap = RemotePrefs.read(prefs)
                 mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend) }
+            } else if (key == RemotePrefs.KEY_FAN_PRESSURE_PAGE_TURN || key == RemotePrefs.KEY_FAN_PRESSURE_SENSITIVITY) {
+                val snap = RemotePrefs.read(prefs)
+                pressureDetector.isEnabled = snap.fanPressurePageTurn
+                pressureDetector.thresholdHpa = RemotePrefs.sensitivityToThreshold(snap.fanPressureSensitivity)
             }
         }
         runCatching { prefs.registerOnSharedPreferenceChangeListener(pinsListener) }
@@ -256,6 +271,9 @@ class FanHost(
     private fun screenW(): Int = wm.currentWindowMetrics.bounds.width()
     private fun screenH(): Int = wm.currentWindowMetrics.bounds.height()
 
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+
     /** Corner claim: raise windows, bind fresh pins, seed the launcher with the
      *  synthetic DOWN at the press point (the real DOWN stayed with the app under
      *  the corner — the spy was only observing until pilfer), then arm the timeout. */
@@ -267,6 +285,9 @@ class FanHost(
         dock.previewMode = false
         val snap = RemotePrefs.read(prefs)
         dock.show(activeCorner, screenW, screenH, snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend)
+        lastTouchX = downX
+        lastTouchY = downY
+        pressureDetector.startListening(settleMs = 280L)
         val t = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, downX, downY, 0)
         dock.forward(down, 0)
@@ -278,6 +299,24 @@ class FanHost(
      *  release always arrives (this is what the old two-window handoff lost). */
     fun forward(ev: MotionEvent) {
         dock.forward(ev, 0)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_MOVE -> {
+                val dx = ev.x - lastTouchX
+                val dy = ev.y - lastTouchY
+                if (kotlin.math.hypot(dx, dy) > 15f) {
+                    pressureDetector.onMotionOccurred(180L)
+                }
+                lastTouchX = ev.x
+                lastTouchY = ev.y
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                pressureDetector.stopListening()
+            }
+            MotionEvent.ACTION_DOWN -> {
+                lastTouchX = ev.x
+                lastTouchY = ev.y
+            }
+        }
         armTimeout() // reference :194-195 (updateGesture re-arms the timeout every event)
     }
 
@@ -286,9 +325,48 @@ class FanHost(
     fun cancelExternal() = retract("STREAM_END")
 
     private fun retract(source: String) {
+        pressureDetector.stopListening()
         mainHandler.removeCallbacks(timeout)
         logger(Log.INFO, "FAN_RETRACT_$source", null)
         dock.forceRetract()
+    }
+
+    private fun onHeavyPressTriggered() {
+        if (!fanWindowsUp || !dock.isBusy) return
+        if (!pressureDetector.isTouchActive) return
+        // 需注意手指停在app图标或更多上不能触发翻页
+        if (dock.launcher.isHoveringItem) {
+            logger(Log.DEBUG, "FAN_PRESSURE_IGNORED_HOVER index=${dock.launcher.currentHoveredIndex}", null)
+            return
+        }
+        val turned = dock.nextPage()
+        if (turned) {
+            logger(Log.INFO, "FAN_PRESSURE_PAGE_TURN page=${dock.currentPage} total=${dock.totalPages}", null)
+            performHeavyPressHaptic()
+        }
+    }
+
+    private fun performHeavyPressHaptic() {
+        val vibrator = if (android.os.Build.VERSION.SDK_INT >= 31) {
+            host.getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            host.getSystemService(Vibrator::class.java)
+        }
+        if (vibrator != null && vibrator.hasVibrator()) {
+            try {
+                val effect = VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK)
+                vibrator.vibrate(effect)
+            } catch (_: Throwable) {
+                try {
+                    val effect = VibrationEffect.createOneShot(35L, 180)
+                    vibrator.vibrate(effect)
+                } catch (_: Throwable) {
+                    dock.launcher.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                }
+            }
+        } else {
+            dock.launcher.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        }
     }
 
     private fun armTimeout() {
@@ -671,6 +749,7 @@ class FanHost(
         pinsListener?.let { runCatching { prefs.unregisterOnSharedPreferenceChangeListener(it) } }
         pinsListener = null
         mainHandler.removeCallbacks(timeout)
+        pressureDetector.destroy()
         hideMorePanel(animated = false)
         tearFanWindowsNow()
         dock.destroy()

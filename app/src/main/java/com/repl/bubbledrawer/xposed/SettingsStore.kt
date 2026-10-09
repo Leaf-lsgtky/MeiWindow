@@ -112,6 +112,15 @@ object SettingsStore {
         RemoteBridge.remote?.edit()?.putBoolean(RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND, enabled)?.apply()
     }
 
+    /** 扇形重按翻页开关与灵敏度。 */
+    fun setFanPressurePageTurn(context: Context, enabled: Boolean) {
+        RemoteBridge.local(context).edit().putBoolean(RemotePrefs.KEY_FAN_PRESSURE_PAGE_TURN, enabled).apply()
+        RemoteBridge.remote?.edit()?.putBoolean(RemotePrefs.KEY_FAN_PRESSURE_PAGE_TURN, enabled)?.apply()
+    }
+
+    fun setFanPressureSensitivity(context: Context, sensitivity: Int) =
+        putInt(context, RemotePrefs.KEY_FAN_PRESSURE_SENSITIVITY, sensitivity.coerceIn(0, 2))
+
     /** 更多面板推荐应用开关与数量（4, 8, 12, 16, 20）。 */
     fun setRecommendEnabled(context: Context, enabled: Boolean) {
         RemoteBridge.local(context).edit().putBoolean(RemotePrefs.KEY_RECOMMEND_ENABLED, enabled).apply()
