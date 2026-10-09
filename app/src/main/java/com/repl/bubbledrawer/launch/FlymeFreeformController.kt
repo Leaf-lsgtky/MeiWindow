@@ -784,6 +784,13 @@ class FlymeFreeformController(
     companion object {
         const val TAG = "BubbleDrawer"
         @Volatile var instance: FlymeFreeformController? = null
+
+        /**
+         * Freeform state fan-out for consumers that are independent of the Flyme-style takeover
+         * (today: the floating contact bar). Set by `SystemUiHookInstaller` right after this
+         * controller is created, cleared on dispose/hot reload.
+         */
+        @Volatile var freeformObserver: com.repl.bubbledrawer.contactbar.FreeformObserver? = null
         @Volatile var currentModule: XposedModule? = null
         @Volatile var savedController: Any? = null
         @Volatile var savedExecutor: Executor? = null
@@ -865,7 +872,42 @@ class FlymeFreeformController(
             hookMiniBottomUpLimit(module, classLoader)
             hookTopCaptionMove(module, classLoader)
             hookBottomCaptionGestures(module, prefs, classLoader)
+            hookResizeFocus(module, classLoader)
             hookGestureAnimation(module, classLoader)
+        }
+
+        /**
+         * "This is the window the user is working on" — `MiuiFreeformModeResizeHandler.handleResize`
+         * carries the `MiuiFreeformModeTaskInfo` on every resize event (actionMode 0 = down).
+         *
+         * Two consumers: the contact bar re-targets to that window (with two 小窗 open, the bar must
+         * sit under the one being resized), and its per-frame tracking is armed for the drag.
+         */
+        private fun hookResizeFocus(
+            module: XposedModule,
+            classLoader: ClassLoader,
+        ) {
+            val handlerClass = runCatching {
+                classLoader.loadClass("com.android.wm.shell.multitasking.miuifreeform.MiuiFreeformModeResizeHandler")
+            }.getOrNull() ?: return
+
+            handlerClass.declaredMethods.filter { it.name == "handleResize" && it.parameterCount == 5 }.forEach { m ->
+                runCatching {
+                    module.hook(m)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .setId("bubbledrawer.freeform.resize_focus")
+                        .intercept { chain ->
+                            val result = chain.proceed()
+                            val taskInfo = chain.args[2]
+                            val action = (chain.args[4] as? Number)?.toInt() ?: -1
+                            if (taskInfo != null && (action == 0 || action == 2)) {
+                                freeformObserver?.onFreeformTaskFocused(taskInfo)
+                            }
+                            result
+                        }
+                }
+            }
+            log("HOOK_INSTALLED_MiuiFreeformModeResizeHandler.handleResize")
         }
 
         private fun hookControllerCapture(
@@ -1118,6 +1160,10 @@ class FlymeFreeformController(
                             val taskInfo = chain.args[0]
                             if (taskInfo != null && taskInfo !is Number) {
                                 instance?.onTaskAppeared(taskInfo)
+                                // The contact bar (contactbar/ContactBarController) listens here too:
+                                // it must work with HyperOS's own 小窗, i.e. even while the Flyme-style
+                                // takeover above is switched off (flymeFreeformEnabled defaults false).
+                                freeformObserver?.onFreeformTaskAppeared(taskInfo)
                             }
                             result
                         }
@@ -1135,6 +1181,7 @@ class FlymeFreeformController(
                             val taskId = (chain.args[0] as? Number)?.toInt() ?: -1
                             if (taskId > 0) {
                                 instance?.onTaskVanished(taskId)
+                                freeformObserver?.onFreeformTaskVanished(taskId)
                             }
                             result
                         }
@@ -1154,6 +1201,7 @@ class FlymeFreeformController(
                             val newMode = (chain.args[2] as? Number)?.toInt() ?: -1
                             if (taskInfo != null) {
                                 instance?.onTaskModeChanged(taskInfo, oldMode, newMode)
+                                freeformObserver?.onFreeformTaskModeChanged(taskInfo, oldMode, newMode)
                             }
                             result
                         }

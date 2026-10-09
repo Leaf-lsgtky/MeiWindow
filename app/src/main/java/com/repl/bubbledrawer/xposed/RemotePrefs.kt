@@ -141,6 +141,14 @@ object RemotePrefs {
     const val DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL = true
     const val DEFAULT_FLYME_FREEFORM_DIM_BG = true
 
+    /**
+     * 小窗底部联系人条 — the port of Flyme's 「联系人头像」 (`com.flyme.systemuitools`
+     * `notification_show_contact_list` System setting, default on). Independent of the Flyme-style
+     * freeform takeover above: it rides HyperOS's own 小窗.
+     */
+    const val KEY_CONTACT_BAR = "contact_bar_enabled"
+    const val DEFAULT_CONTACT_BAR = true
+
     @androidx.compose.runtime.Immutable
     data class Snapshot(
         val enabled: Boolean,
@@ -180,6 +188,8 @@ object RemotePrefs {
         val flymeFreeformSwipeUpHoldFree: Boolean = DEFAULT_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE,
         val flymeFreeformSwipeDownFull: Boolean = DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL,
         val flymeFreeformDimBg: Boolean = DEFAULT_FLYME_FREEFORM_DIM_BG,
+        /** 小窗底部联系人条（Flyme「联系人头像」） */
+        val contactBar: Boolean = DEFAULT_CONTACT_BAR,
     )
 
     fun enabledFor(side: com.repl.bubbledrawer.gesture.SpySide): (Snapshot) -> Boolean = { snap ->
@@ -229,6 +239,7 @@ object RemotePrefs {
             flymeFreeformSwipeUpHoldFree = sp.getBoolean(KEY_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE, DEFAULT_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE),
             flymeFreeformSwipeDownFull = sp.getBoolean(KEY_FLYME_FREEFORM_SWIPE_DOWN_FULL, DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL),
             flymeFreeformDimBg = sp.getBoolean(KEY_FLYME_FREEFORM_DIM_BG, DEFAULT_FLYME_FREEFORM_DIM_BG),
+            contactBar = sp.getBoolean(KEY_CONTACT_BAR, DEFAULT_CONTACT_BAR),
             pins = sp.getString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, "").orEmpty(),
         )
     }

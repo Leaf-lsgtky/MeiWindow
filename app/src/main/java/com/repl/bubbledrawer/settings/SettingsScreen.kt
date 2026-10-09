@@ -606,6 +606,26 @@ fun ExperimentalSettingsScreen(
                 },
             )
 
+            // --- 小窗底部联系人条 (Flyme「联系人头像」移植) ---
+            item(key = "exp-contact-bar-title") {
+                SmallTitle(text = stringResource(R.string.exp_section_contact_bar))
+            }
+            groupedCardItems(
+                keyPrefix = "exp-contact-bar",
+                items = listOf(
+                    CardItem("contact-bar") {
+                        SwitchRow(
+                            title = stringResource(R.string.exp_contact_bar),
+                            checked = snap.contactBar,
+                            onCheckedChange = actions::setContactBar,
+                        )
+                    },
+                    CardItem("contact-bar-hint") {
+                        SliderHintRow(stringResource(R.string.exp_contact_bar_summary))
+                    },
+                ),
+            )
+
             // --- 小白条手势交互 ---
             item(key = "exp-gestures-title") {
                 SmallTitle(text = stringResource(R.string.exp_section_gestures))

@@ -37,6 +37,7 @@ interface SettingsActions {
     fun setFlymeFreeformSwipeUpHoldFree(enabled: Boolean)
     fun setFlymeFreeformSwipeDownFull(enabled: Boolean)
     fun setFlymeFreeformDimBg(enabled: Boolean)
+    fun setContactBar(enabled: Boolean)
     fun openManage(context: Context)
 }
 
@@ -69,6 +70,7 @@ class StoreSettingsActions(private val context: Context) : SettingsActions {
     override fun setFlymeFreeformSwipeUpHoldFree(enabled: Boolean) = SettingsStore.setFlymeFreeformSwipeUpHoldFree(context, enabled)
     override fun setFlymeFreeformSwipeDownFull(enabled: Boolean) = SettingsStore.setFlymeFreeformSwipeDownFull(context, enabled)
     override fun setFlymeFreeformDimBg(enabled: Boolean) = SettingsStore.setFlymeFreeformDimBg(context, enabled)
+    override fun setContactBar(enabled: Boolean) = SettingsStore.setContactBar(context, enabled)
     override fun openManage(context: Context) {
         context.startActivity(
             android.content.Intent(context, com.repl.bubbledrawer.pin.PinManageActivity::class.java),

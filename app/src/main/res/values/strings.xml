@@ -98,4 +98,9 @@
     <string name="exp_swipe_down_fullscreen_summary">向下快速滑动小白条直接全屏化当前应用</string>
     <string name="exp_section_info">说明</string>
     <string name="exp_freeform_info">开启后，小窗将以轻量小窗模式启动。通过小白条上滑悬停转为自由小窗后，模块将直接取消接管，恢复 HyperOS 原生小窗的所有操作（左右拉伸调大小、顶部三点菜单等）。</string>
+
+    <!-- 小窗底部联系人条（Flyme「联系人头像」移植） -->
+    <string name="exp_section_contact_bar">小窗联系人条</string>
+    <string name="exp_contact_bar">显示最近联系人头像</string>
+    <string name="exp_contact_bar_summary">微信 / QQ 等应用以小窗打开时，在小窗下方显示最近聊天的联系人头像：宽度始终与小窗一致，随拉伸实时变化；小窗变为迷你小窗时自动隐藏。点击头像直接在该小窗内打开对应会话。头像来自系统通知，不读取应用数据。</string>
 </resources>

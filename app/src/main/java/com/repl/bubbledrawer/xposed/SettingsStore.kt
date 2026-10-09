@@ -163,6 +163,10 @@ object SettingsStore {
     fun setFlymeFreeformDimBg(context: Context, enabled: Boolean) =
         putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_DIM_BG, enabled)
 
+    /** 小窗底部联系人条（Flyme「联系人头像」移植）。 */
+    fun setContactBar(context: Context, enabled: Boolean) =
+        putBoolean(context, RemotePrefs.KEY_CONTACT_BAR, enabled)
+
     private fun putBoolean(context: Context, key: String, value: Boolean) {
         RemoteBridge.local(context).edit().putBoolean(key, value).apply()
         RemoteBridge.remote?.edit()?.putBoolean(key, value)?.apply()

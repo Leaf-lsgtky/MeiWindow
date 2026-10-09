@@ -83,5 +83,24 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - [ ] 杀后台后服务自启（START_STICKY）；重启手机后开关仍工作（首次需手动启动一次，二期加 BOOT）
 - [ ] 固定列表重启不丢
 
+## A8 小窗联系人条（Flyme「联系人头像」移植）
+前置：设置页「实验性功能 → 小窗联系人条」默认开启；被验证应用需有**未清除的通知**（头像取自通知）。
+
+- [ ] 微信/QQ 以小窗打开 → 小窗**正下方**浮出头像条，宽度与小窗一致、跟随下边缘
+- [ ] **实时拉伸小窗**：拖右下角改尺寸时，条宽逐帧跟随，不出现错位/滞后（日志
+      `CONTACT_BAR_GEOM … visual=… bar=… animating=true`，`bar` 的 width 始终 == `visual` 的 width）
+- [ ] 小窗**移动**（拖顶部把手）时条跟着走
+- [ ] 小白条上滑 → **迷你小窗**：条立即消失（日志 `CONTACT_BAR_HIDE reason=MINI`）；
+      从迷你恢复成普通小窗 → 条自动回来（`CONTACT_BAR_HIDE` 不再刷、`CONTACT_BAR_SHOW`）
+- [ ] 贴边（普通/迷你贴边，mode 2/3）不显示条
+- [ ] 点某个头像 → 会话在小窗内打开（日志 `CONTACT_BAR_OPEN_OPTIONS … reuseTask=<小窗taskId>`）；
+      `CONTACT_BAR_OPEN_PLAIN` 表示退化为普通启动（要记录）
+- [ ] 非 IM 应用（如抖音）小窗不显示条（`CONTACT_BAR_HIDE reason=NOT_IM_APP`）
+- [ ] 小窗关闭后条消失（`CONTACT_BAR_HIDE reason=TASK_VANISHED`）
+- [ ] 关闭设置开关 → 立即消失（`CONTACT_BAR_PREF_CHANGED enabled=false`）
+- [ ] 通知刷新即时生效：小窗开着时来一条新微信 → 头像条多/换头像（`CONTACT_BAR_DATA pkg=… items=N`）
+- [ ] 快捷判据：`adb logcat -s BubbleDrawer | findstr CONTACT_BAR`
+      （启动时应有 `CONTACT_BAR_HOOKS_INSTALLED pipeline=true` 与 `CONTACT_BAR_NOTIF_LISTENER_ATTACHED`）
+
 ## 贴边模式（可选，root）
 - [ ] 设置页"贴边模式"：无 su → toast 需要 root；有 su → inset=0，正上滑角落也能出扇

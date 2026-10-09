@@ -21,6 +21,7 @@ class SystemUiHookInstaller(
     private var inputMonitor: CornerInputMonitor? = null
     private var appClassLoader: ClassLoader? = null
     private var flymeController: com.repl.bubbledrawer.launch.FlymeFreeformController? = null
+    private var contactBar: com.repl.bubbledrawer.contactbar.ContactBarController? = null
 
     /** captured when the Application first runs — needed to rebuild after a hot reload */
     private var appContext: Context? = null
@@ -33,6 +34,12 @@ class SystemUiHookInstaller(
             com.repl.bubbledrawer.launch.FlymeFreeformController.installHooks(module, prefs, classLoader)
         }.onFailure {
             module.log(Log.WARN, TAG, "FLYME_FREEFORM_HOOKS_INSTALL_FAILED", it)
+        }
+        // 小窗底部联系人条的数据源: the process-wide NotifPipeline (contactbar/RecentConversations).
+        runCatching {
+            com.repl.bubbledrawer.contactbar.RecentConversations.installHooks(module, classLoader)
+        }.onFailure {
+            module.log(Log.WARN, TAG, "CONTACT_BAR_HOOKS_INSTALL_FAILED", it)
         }
         // Which class creates the monitors that carry DO_NOT_PILFER (see the class docs) —
         // read-only, and installed before ours exists so creation order is visible too.
@@ -81,6 +88,9 @@ class SystemUiHookInstaller(
      * so [reinstall] can bind again.
      */
     fun dispose() {
+        runCatching { com.repl.bubbledrawer.launch.FlymeFreeformController.freeformObserver = null }
+        runCatching { contactBar?.dispose() }
+        contactBar = null
         runCatching { flymeController?.dispose() }
         flymeController = null
         runCatching { inputMonitor?.dispose() }
@@ -125,6 +135,13 @@ class SystemUiHookInstaller(
             freeformCtrl.pilferCallback = { monitor.pilfer() }
             monitor.outsideTapHandler = { ev -> freeformCtrl.onInterceptTouchEvent(ev) }
             freeformCtrl.start()
+
+            // 小窗底部联系人条: rides the freeform task notifications forwarded by the hooks above.
+            val bar = com.repl.bubbledrawer.contactbar.ContactBarController(context, prefs) { priority, message, error ->
+                module.log(priority, TAG, message, error)
+            }
+            contactBar = bar
+            com.repl.bubbledrawer.launch.FlymeFreeformController.freeformObserver = bar
 
             monitor.start()
             module.log(
