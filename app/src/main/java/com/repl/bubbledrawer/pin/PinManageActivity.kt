@@ -17,6 +17,7 @@ import com.repl.bubbledrawer.ui.theme.BubbleDrawerTheme
 import com.repl.bubbledrawer.ui.util.BlurredBar
 import com.repl.bubbledrawer.ui.util.barColor
 import com.repl.bubbledrawer.ui.util.rememberBlurBackdrop
+import com.repl.bubbledrawer.xposed.RemoteBridge
 import com.repl.bubbledrawer.xposed.SettingsStore
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.WindowInsets
@@ -57,6 +58,16 @@ class PinManageActivity : ComponentActivity() {
         ).also { AppGraph.pinStore = it }
     }
 
+    private var pinsPrefsListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    override fun onDestroy() {
+        pinsPrefsListener?.let { listener ->
+            runCatching { RemoteBridge.local(this).unregisterOnSharedPreferenceChangeListener(listener) }
+        }
+        pinsPrefsListener = null
+        super.onDestroy()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -75,6 +86,16 @@ class PinManageActivity : ComponentActivity() {
             },
         )
         model.reload()
+        // Pins can also be edited in the fan's 更多 panel (SystemUI), which hands them over as a
+        // broadcast into this process. Watch the mirror file so this page follows live instead
+        // of showing the list as it was when the Activity opened.
+        pinsPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == com.repl.bubbledrawer.data.PrefsPinBackend.KEY) {
+                runOnUiThread { model.refreshPins() }
+            }
+        }.also { listener ->
+            runCatching { RemoteBridge.local(this).registerOnSharedPreferenceChangeListener(listener) }
+        }
         setContent {
             BubbleDrawerTheme {
                 val scrollBehavior = MiuixScrollBehavior()

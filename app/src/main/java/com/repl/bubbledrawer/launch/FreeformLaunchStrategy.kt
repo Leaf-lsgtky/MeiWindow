@@ -90,7 +90,9 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
         } ?: return false
 
         val opts = miuiOptions(context, app.packageName) ?: aospOptions(context)
+        val existingTask = reuseExistingTask(opts, app.packageName, app.userId)
         val bundle = opts.toBundle()
+        logLaunchOptions(context, app.packageName, opts, existingTask)
 
         if (app.userId != 0 && userHandle != null) {
             // 1. Reflective Context.startActivityAsUser (works directly in SystemUI)
@@ -129,6 +131,59 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
         }
     }
 
+    /**
+     * Hand the ROM the EXISTING task of this app, so that turning it into a small window applies
+     * the小窗 geometry instead of keeping the task's old configuration.
+     *
+     * Report 2026-10-09 (user): "全新打开是正常小窗，但若不是全新打开则会变成不正常比例，
+     * 不正常的接近手机比例" — a reused task kept its fullscreen config (1220x2656 = the phone
+     * shape, then scaled) while the correct小窗 is ≈9:16, which is what the ROM's own
+     * `getCustomFreeformRect` asks for (1220x1952) and what a fresh launch gets.
+     *
+     * This mirrors the one ROM path that reuses deliberately —
+     * `MiuiCaptionClickListener.handleNewWindowClicked:239-243` does
+     * `activityOptions.setLaunchTaskId(recentTask.taskId)` before sending the freeform options.
+     */
+    private fun reuseExistingTask(opts: ActivityOptions, pkg: String, userId: Int): Int {
+        val taskId = MiuiFreeform.reusableTaskId(pkg, userId)
+        if (taskId <= 0) return -1
+        runCatching {
+            ActivityOptions::class.java
+                .getMethod("setLaunchTaskId", Int::class.javaPrimitiveType)
+                .invoke(opts, taskId)
+        }
+        return taskId
+    }
+
+    /**
+     * Diagnostics for the one thing that decides the small window's SHAPE (2026-10-09 report:
+     * a fresh launch came up 16:9 while reusing a background task kept the phone ratio).
+     *
+     * The window geometry is whatever `launchBounds` + `launchWindowingMode` we hand over, and
+     * a reused task keeps its own configuration instead — so printing our bounds next to the
+     * ROM's own computation (`MiuiFreeform.defaultFreeformRect` = `getCustomFreeformRect(...)`)
+     * and the live screen size tells us immediately whether the shape came from our options,
+     * from the fallback path, or from the framework.
+     */
+    private fun logLaunchOptions(context: Context, pkg: String, opts: ActivityOptions, existingTask: Int) {
+        runCatching {
+            val dm: DisplayMetrics = context.resources.displayMetrics
+            val bounds = runCatching { opts.launchBounds }.getOrNull()
+            val mode = runCatching {
+                ActivityOptions::class.java.getMethod("getLaunchWindowingMode").invoke(opts) as? Int
+            }.getOrNull()
+            val romRect = runCatching { MiuiFreeform.defaultFreeformRect(context, pkg) }.getOrNull()
+            val ratio = bounds?.let { "%.3f".format(it.width().toFloat() / it.height()) } ?: "-"
+            val romRatio = romRect?.let { "%.3f".format(it.width().toFloat() / it.height()) } ?: "-"
+            android.util.Log.i(
+                "BubbleDrawer",
+                "LAUNCH_OPTS pkg=$pkg mode=$mode reuseTask=$existingTask bounds=$bounds ratio=$ratio " +
+                    "romRect=$romRect romRatio=$romRatio " +
+                    "screen=${dm.widthPixels}x${dm.heightPixels} position=$position",
+            )
+        }
+    }
+
     /** HyperOS path — `MiuiMultiWindowUtils.getActivityOptions(...)`, positioned when asked. */
     private fun miuiOptions(context: Context, pkg: String): ActivityOptions? {
         val snap = com.repl.bubbledrawer.xposed.SettingsStore.snapshot(context)
@@ -156,6 +211,26 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
                 }
             }
     }
+
+    /**
+     * The rect a small window should have: the PHONE's proportions, like a reused task gets.
+     *
+     * Measured on device 2026-10-09 (1220x2656, freeformScale 0.7):
+     *  - ROM's own geometry for a fresh launch (`getCustomFreeformRect`, `isNormalFreeForm=true`),
+     *    identical for our fan and for 安全中心's sidebar: 1220x1952 = 10:16 → the app is laid out
+     *    on a canvas that is NOT the phone's shape, so a fresh 抖音 came up looking 16:9;
+     *  - a REUSED task keeps its fullscreen config 1220x2656 (the phone) and is only scaled
+     *    (854x1859) — always the shape the user called correct.
+     * So state the display rect and let MIUI scale it: window = display x freeformScale, phone
+     * shaped, exactly what the reuse path shows. With a panel rect (更多 tile) the vertical
+     * extent of the panel is kept and the width follows from the phone ratio, so the app still
+     * opens where the panel sat (that part was correct).
+     */
+    // NOTE (2026-10-09): a "make it phone-proportioned" override was tried here and reverted —
+    // backwards. User's measurement of what is correct: 小窗 ≈ 9:16 (what the sidebar and the
+    // ROM's own `getCustomFreeformRect` give), and the BROKEN case is the opposite one — an app
+    // that already has a task comes up with the PHONE's proportions (1220x2656 config scaled)
+    // instead of the小窗 rect. See [reusableTaskId] for that fix.
 
     private fun aospOptions(context: Context): ActivityOptions {
         val opts = ActivityOptions.makeBasic()

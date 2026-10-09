@@ -171,6 +171,38 @@ object MiuiFreeform {
         return options4("miui.app.MiuiFreeFormManager", context, pkg, noCheck)
     }
 
+    /**
+     * Task id of [pkg]'s existing (background or fullscreen) task, or -1 — the input for
+     * `ActivityOptions.setLaunchTaskId`.
+     *
+     * Needed for the small-window SHAPE: launching a freeform window for an app that already
+     * runs makes the system reparent that task, which keeps its fullscreen configuration
+     * (1220x2656 on this phone = the phone's proportions) instead of the small-window rect the
+     * ROM computes. Handing over the task id is what MIUI itself does when it deliberately
+     * reuses a task (`MiuiCaptionClickListener.handleNewWindowClicked:239-243`).
+     *
+     * `ActivityTaskManager.getService().getTasks()` is a hidden but ordinary call; it answers
+     * with the caller's visible tasks (SystemUI holds REAL_GET_TASKS, so it sees the app tasks;
+     * the module's own process just gets its own list, i.e. no reuse → fresh launch as before).
+     */
+    fun reusableTaskId(pkg: String, userId: Int): Int = runCatching {
+        val atm = Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)
+        val tasks = atm.javaClass
+            .getMethod("getTasks", Int::class.javaPrimitiveType)
+            .invoke(atm, 30) as? List<*>
+        tasks?.firstOrNull { task ->
+            val c = task?.javaClass ?: return@firstOrNull false
+            fun field(name: String): Any? = runCatching { c.getField(name).get(task) }.getOrNull()
+            val base = field("baseActivity") as? android.content.ComponentName
+            val real = field("realActivity") as? android.content.ComponentName
+            val taskUser = field("userId") as? Int
+            val owner = base?.packageName ?: real?.packageName
+            owner == pkg && (taskUser == null || taskUser == userId)
+        }?.let { task ->
+            runCatching { task.javaClass.getField("taskId").getInt(task) }.getOrNull()
+        }
+    }.getOrNull() ?: -1
+
     /** `ActivityOptions.setFreeformAnimation(false)` — MIUI addition, best effort. */
     fun withoutFreeformAnimation(options: ActivityOptions): ActivityOptions {
         runCatching {

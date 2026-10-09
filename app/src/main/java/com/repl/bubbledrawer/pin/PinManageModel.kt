@@ -129,6 +129,14 @@ class PinManageModel(
         }
     }
 
+    /**
+     * Re-read only the pins (no app-list pass). The SystemUI panel writes pins through the
+     * handoff while this page may already be open — without this the app's 收藏 kept the
+     * pre-edit list on screen next to a panel that showed the new one.
+     */
+    @MainThread
+    fun refreshPins() = rebuild()
+
     @MainThread
     fun toggleManageMode() {
         manageMode = !manageMode

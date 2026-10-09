@@ -30,8 +30,8 @@ class PinSyncService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val callerUid = Binder.getCallingUid()
-        if (callerUid != Process.SYSTEM_UID) {
-            Log.w(TAG, "PIN_SYNC_REJECTED uid=$callerUid (only android allowed)")
+        if (!isSystemUiCaller(callerUid)) {
+            Log.w(TAG, "PIN_SYNC_REJECTED uid=$callerUid (only SystemUI/android allowed)")
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -41,20 +41,42 @@ class PinSyncService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        val backend = SettingsStore.pinBackend(applicationContext)
-        backend.write(raw)
+        val rev = intent.getLongExtra(EXTRA_REV, 0L)
+        if (rev > 0L) {
+            SettingsStore.applyPushedPins(applicationContext, raw, rev)
+        } else {
+            SettingsStore.pinBackend(applicationContext).write(raw)
+        }
         Log.i(
             TAG,
-            "PIN_SYNC_APPLIED pins=${PinCodec.decode(raw).size} len=${raw.length}",
+            "PIN_SYNC_APPLIED pins=${PinCodec.decode(raw).size} len=${raw.length} rev=$rev",
         )
         stopSelf(startId)
         return START_NOT_STICKY
+    }
+
+    /**
+     * The old check was `callerUid == Process.SYSTEM_UID` (1000) — but on HyperOS 17 this
+     * ROM's SystemUI runs as an ordinary app uid (u0_a231 / 10231, verified with
+     * `ps -A -o USER,PID,NAME` and `packages.list`), so every handoff through this service was
+     * rejected as "uid=10231 (only android allowed)". Resolve the caller's packages instead of
+     * trusting a hard-coded uid, and keep accepting real uid 1000 for other ROMs.
+     */
+    private fun isSystemUiCaller(callerUid: Int): Boolean {
+        if (callerUid == Process.SYSTEM_UID || callerUid == Process.myUid()) return true
+        val packages = runCatching { packageManager.getPackagesForUid(callerUid) }.getOrNull()
+        return packages?.contains(SYSTEMUI_PACKAGE) == true
     }
 
     companion object {
         const val TAG = "BubbleDrawer"
         const val ACTION = "com.repl.bubbledrawer.action.SYNC_PINS"
         const val EXTRA_PINS = "pins"
+
+        /** Freshness stamp travelling with [EXTRA_PINS] (see PinsSync). 0 = older sender. */
+        const val EXTRA_REV = "pins_rev"
+
+        const val SYSTEMUI_PACKAGE = "com.android.systemui"
 
         /** "pkg#user;…" for ~100 pins is < 5 KB; 10 KB is a generous cap. */
         private const val MAX_VALUE_LEN = 10_000

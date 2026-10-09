@@ -227,9 +227,13 @@ class CornerInputMonitor(
 
     fun start() {
         if (Looper.myLooper() == mainHandler.looper) applySettings() else mainHandler.post(::applySettings)
-        prefs.registerOnSharedPreferenceChangeListener { _, _ ->
+        // Kept as a field so dispose() can take it back off: a lambda registered inline is
+        // unreachable afterwards, and every hot reload left another live listener behind.
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
             if (Looper.myLooper() == mainHandler.looper) applySettings() else mainHandler.post(::applySettings)
         }
+        prefsListener = listener
+        prefs.registerOnSharedPreferenceChangeListener(listener)
         registerDebugReceiver()
         // Pre-warm FanHost and cached apps in background so the very first swipe has apps ready
         mainHandler.post { runCatching { ensureFan() } }
@@ -237,6 +241,7 @@ class CornerInputMonitor(
         // time is exactly the state a reboot leaves behind, which is what the panel bug needs
         // compared against a later DEBUG_PROBE run. See AppEnumProbe.
         Thread { runCatching { AppEnumProbe.run(context, logger, deep = false) } }.start()
+        logger(Log.INFO, "MONITOR_INSTANCE_STARTED id=${System.identityHashCode(this)}", null)
     }
 
     /**
@@ -252,6 +257,9 @@ class CornerInputMonitor(
         if (debugReceiver != null) return
         val r = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: android.content.Context?, i: android.content.Intent?) {
+                // A broadcast already in flight when the hot reload disposed this instance
+                // must not resurrect the fan (see dispose()).
+                if (disposed) return
                 when (i?.action) {
                     ACTION_DEBUG_MORE -> mainHandler.post { ensureFan().toggleMorePanelForDebug() }
                     AppEnumProbe.ACTION -> Thread { runCatching { AppEnumProbe.run(context, logger) } }.start()
@@ -269,11 +277,21 @@ class CornerInputMonitor(
             )
         }.onSuccess {
             debugReceiver = r
-            logger(Log.INFO, "DEBUG_MORE_READY action=$ACTION_DEBUG_MORE probe=${AppEnumProbe.ACTION}", null)
+            logger(
+                Log.INFO,
+                "DEBUG_MORE_READY action=$ACTION_DEBUG_MORE probe=${AppEnumProbe.ACTION} " +
+                    "instance=${System.identityHashCode(this)}",
+                null,
+            )
         }.onFailure { logger(Log.WARN, "DEBUG_MORE_REGISTER_FAILED", it) }
     }
 
     private var debugReceiver: android.content.BroadcastReceiver? = null
+    private var prefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    /** set by [dispose]; every receiver entry point checks it before touching the runtime */
+    @Volatile
+    private var disposed = false
 
     /**
      * Tear everything down for an API-102 HOT RELOAD (no reboot, no SystemUI restart):
@@ -281,8 +299,20 @@ class CornerInputMonitor(
      * belong to the OLD classloader and must not survive the swap — otherwise the reload
      * leaves a second subscriber on the same gestures and a stale full-screen window that
      * swallows touches. `onHotReloaded` re-installs a fresh instance afterwards.
+     *
+     * EVERY registration made in [start] has to be undone here. The debug receiver and the
+     * preferences listener were missing until 2026-10-09, and the cost was exactly what a
+     * hot reload makes easy to miss: `dumpsys activity broadcasts` showed TWO
+     * `com.repl.bubbledrawer.action.DEBUG_MORE` receivers in one SystemUI process, both from
+     * live (one current, one stale) CornerInputMonitors. A single broadcast was therefore
+     * served twice, each stale instance lazily built its OWN FanHost with no gesture monitor
+     * but full window rights, and the panel came up twice, stacked — dismissing the top one
+     * left an identical copy that "could not be closed" (outside tap and app launch both
+     * only hid the top). The gesture path was never affected, which is why the fan's own
+     * 更多 tile behaved.
      */
     fun dispose() {
+        disposed = true
         mainHandler.removeCallbacksAndMessages(null)
         runCatching { stopMonitorTransport() }
         for (side in bindings.keys.toList()) {
@@ -291,11 +321,15 @@ class CornerInputMonitor(
         }
         runCatching { fan?.destroy() }
         fan = null
+        debugReceiver?.let { runCatching { context.unregisterReceiver(it) } }
+        debugReceiver = null
+        prefsListener?.let { runCatching { prefs.unregisterOnSharedPreferenceChangeListener(it) } }
+        prefsListener = null
         insetProbe?.let { probe -> runCatching { wm.removeViewImmediate(probe) } }
         insetProbe = null
         stroke = null
         monitorActive = false
-        logger(Log.INFO, "MON_DISPOSED_FOR_HOT_RELOAD", null)
+        logger(Log.INFO, "MON_DISPOSED_FOR_HOT_RELOAD id=${System.identityHashCode(this)}", null)
     }
 
     private fun applySettings() {

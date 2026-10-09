@@ -34,7 +34,9 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import com.repl.bubbledrawer.data.PinBackend
+import com.repl.bubbledrawer.data.PinCodec
 import com.repl.bubbledrawer.data.PinStore
+import com.repl.bubbledrawer.data.PinsSync
 import com.repl.bubbledrawer.data.PrefsPinBackend
 import com.repl.bubbledrawer.gesture.Corner
 import com.repl.bubbledrawer.gesture.SpySide
@@ -108,51 +110,94 @@ class FanHost(
         storageContext.getSharedPreferences("bubbledrawer_pins", Context.MODE_PRIVATE)
 
     private val pinStore = PinStore(object : PinBackend {
+        private val local get() = PrefsPinBackend(sysUiPrefs)
+        private val remote get() = PrefsPinBackend(prefs)
+
         override fun read(): String {
+            // This session's own edit is authoritative until the app confirms it.
             pinsOverlay?.let { return it }
-            if (sysUiPrefs.contains(PrefsPinBackend.KEY)) {
-                return sysUiPrefs.getString(PrefsPinBackend.KEY, "").orEmpty()
-            }
-            if (prefs.contains(PrefsPinBackend.KEY)) {
-                val remoteStored = prefs.getString(PrefsPinBackend.KEY, "").orEmpty()
-                if (remoteStored.isNotEmpty()) {
-                    sysUiPrefs.edit().putString(PrefsPinBackend.KEY, remoteStored).commit()
+
+            val localBackend = local
+            // `prefs` is the LSPosed remote group: readable here, never writable (see the
+            // class doc above). A read failure must not hide the local copy.
+            val remoteValue = runCatching { remote.read() }.getOrDefault("")
+            val remoteRev = runCatching { remote.readRev() }.getOrDefault(0L)
+
+            val decision = PinsSync.decide(
+                localValue = localBackend.read(),
+                localRev = localBackend.readRev(),
+                remoteValue = remoteValue,
+                remoteRev = remoteRev,
+            )
+            when (decision.source) {
+                PinsSync.Source.REMOTE -> {
+                    localBackend.write(decision.value)
+                    localBackend.writeRev(decision.rev)
                 }
-                return remoteStored
+                PinsSync.Source.LOCAL -> if (decision.pushBack) {
+                    // Our copy is newer than the shared group — the app never applied the
+                    // handoff (force-stopped by HyperOS, broadcast lost…). Hand it over again,
+                    // otherwise the very next SystemUI start would read the stale value.
+                    pushPinsToApp(decision.value, decision.rev)
+                }
+                PinsSync.Source.NONE -> Unit
             }
-            return ""
+            logger(
+                Log.INFO,
+                "PIN_READ src=${decision.source} localRev=${localBackend.readRev()} " +
+                    "remoteRev=$remoteRev pins=${PinCodec.decode(decision.value).size}",
+                null,
+            )
+            return decision.value
         }
 
         override fun write(value: String) {
+            val rev = System.currentTimeMillis()
             pinsOverlay = value
-            // 1. Immediately persist inside SystemUI's own storage
-            sysUiPrefs.edit().putString(PrefsPinBackend.KEY, value).commit()
+            val localBackend = local
+            localBackend.write(value)
+            localBackend.writeRev(rev)
+            pushPinsToApp(value, rev)
+        }
 
-            // 2. Broadcast to module app so App's offline cfg and LSPosed remote group are updated
-            val deliveredBroadcast = runCatching {
-                val intent = Intent(PinSyncReceiver.ACTION)
-                    .setClassName(ModuleResources.MODULE_PACKAGE, "com.repl.bubbledrawer.xposed.PinSyncReceiver")
-                    .putExtra(PinSyncReceiver.EXTRA_PINS, value)
-                host.sendBroadcast(intent)
-                true
-            }.getOrDefault(false)
+        override fun readRev(): Long = local.readRev()
 
-            // 3. Fallback startService attempt
-            val deliveredService = runCatching {
-                val intent = Intent(PinSyncService.ACTION)
-                    .setClassName(ModuleResources.MODULE_PACKAGE, "com.repl.bubbledrawer.xposed.PinSyncService")
-                    .putExtra(PinSyncService.EXTRA_PINS, value)
-                context.startService(intent)
-                true
-            }.getOrDefault(false)
-
-            logger(
-                if (deliveredBroadcast || deliveredService) Log.INFO else Log.WARN,
-                "PIN_WRITE_HANDOFF broadcast=$deliveredBroadcast service=$deliveredService valueLen=${value.length}",
-                null,
-            )
+        override fun writeRev(rev: Long) {
+            local.writeRev(rev)
         }
     })
+
+    /**
+     * Hand the pin order to the module's app process: explicit broadcast first (works even
+     * when the app is idle), service as the fallback (it is accepted now — the old uid check
+     * only allowed uid 1000, while this ROM's SystemUI is an ordinary app uid).
+     */
+    private fun pushPinsToApp(value: String, rev: Long) {
+        val deliveredBroadcast = runCatching {
+            val intent = Intent(PinSyncReceiver.ACTION)
+                .setClassName(ModuleResources.MODULE_PACKAGE, "com.repl.bubbledrawer.xposed.PinSyncReceiver")
+                .putExtra(PinSyncReceiver.EXTRA_PINS, value)
+                .putExtra(PinSyncReceiver.EXTRA_REV, rev)
+            host.sendBroadcast(intent)
+            true
+        }.getOrDefault(false)
+
+        val deliveredService = runCatching {
+            val intent = Intent(PinSyncService.ACTION)
+                .setClassName(ModuleResources.MODULE_PACKAGE, "com.repl.bubbledrawer.xposed.PinSyncService")
+                .putExtra(PinSyncService.EXTRA_PINS, value)
+                .putExtra(PinSyncService.EXTRA_REV, rev)
+            context.startService(intent)
+            true
+        }.getOrDefault(false)
+
+        logger(
+            if (deliveredBroadcast || deliveredService) Log.INFO else Log.WARN,
+            "PIN_WRITE_HANDOFF broadcast=$deliveredBroadcast service=$deliveredService " +
+                "rev=$rev valueLen=${value.length}",
+            null,
+        )
+    }
 
     private val strategy = ILaunchStrategy { ctx, app ->
         // freeform toggle from the same prefs the monitor watches (remote group)
@@ -204,17 +249,31 @@ class FanHost(
         registerUnlockReceiver()
         // pins edits while the fan is open → live rebind (reference :85-96 watch pattern)
         pinsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == PrefsPinBackend.KEY) {
-                val remoteVal = prefs.getString(PrefsPinBackend.KEY, null)
-                if (remoteVal != null) {
-                    sysUiPrefs.edit().putString(PrefsPinBackend.KEY, remoteVal).commit()
-                    pinsOverlay = remoteVal
+            if (key == PrefsPinBackend.KEY || key == PrefsPinBackend.KEY_REV) {
+                // The shared group moved: adopt it only when it is genuinely newer than our own
+                // copy. Blindly copying it here is what used to make the panel show the app's
+                // list and the app show the panel's, each depending on who wrote last.
+                val remoteBackend = PrefsPinBackend(prefs)
+                val remoteRev = runCatching { remoteBackend.readRev() }.getOrDefault(0L)
+                val remoteValue = runCatching { remoteBackend.read() }.getOrDefault("")
+                val localBackend = PrefsPinBackend(sysUiPrefs)
+                val localRev = localBackend.readRev()
+                if (remoteRev > localRev || (remoteRev == localRev && remoteValue == localBackend.read())) {
+                    localBackend.write(remoteValue)
+                    localBackend.writeRev(remoteRev)
+                    pinsOverlay = null
+                } else if (remoteValue != localBackend.read()) {
+                    pushPinsToApp(localBackend.read(), localRev)
                 }
-                val snap = RemotePrefs.read(prefs)
-                mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend) }
+                logger(
+                    Log.INFO,
+                    "PIN_REMOTE_CHANGED remoteRev=$remoteRev localRev=$localRev " +
+                        "pins=${PinCodec.decode(localBackend.read()).size}",
+                    null,
+                )
+                rebindFanIfBusy()
             } else if (key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP || key == RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND) {
-                val snap = RemotePrefs.read(prefs)
-                mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend) }
+                rebindFanIfBusy()
             } else if (key == RemotePrefs.KEY_FAN_PRESSURE_PAGE_TURN || key == RemotePrefs.KEY_FAN_PRESSURE_SENSITIVITY) {
                 val snap = RemotePrefs.read(prefs)
                 pressureDetector.isEnabled = snap.fanPressurePageTurn
@@ -227,16 +286,24 @@ class FanHost(
         val syncFromApp = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: Context?, intent: Intent?) {
                 val raw = intent?.getStringExtra(PinSyncReceiver.EXTRA_PINS) ?: return
-                if (PinSyncReceiver.isPlausiblePinsValue(raw)) {
-                    sysUiPrefs.edit().putString(PrefsPinBackend.KEY, raw).commit()
-                    pinsOverlay = raw
-                    val snap = RemotePrefs.read(prefs)
-                    mainHandler.post {
-                        if (dock.isBusy) {
-                            dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend)
-                        }
-                    }
-                    logger(Log.INFO, "PIN_SYNC_FROM_APP_APPLIED len=${raw.length}", null)
+                if (!PinSyncReceiver.isPlausiblePinsValue(raw)) return
+                val rev = intent.getLongExtra(PinSyncReceiver.EXTRA_REV, 0L)
+                val localBackend = PrefsPinBackend(sysUiPrefs)
+                val localRev = localBackend.readRev()
+                val localValue = localBackend.read()
+                if (rev <= 0L || rev >= localRev) {
+                    // The app's copy is at least as new: adopt it and drop our session overlay,
+                    // so reads stop pinning this session's earlier edit.
+                    localBackend.write(raw)
+                    localBackend.writeRev(if (rev > 0L) rev else System.currentTimeMillis())
+                    pinsOverlay = null
+                    rebindFanIfBusy()
+                    logger(Log.INFO, "PIN_SYNC_FROM_APP_APPLIED len=${raw.length} rev=$rev", null)
+                } else {
+                    // A stale delivery (e.g. the app's pre-existing value arriving after a panel
+                    // edit): keep ours and hand it over again, otherwise the two lists diverge.
+                    logger(Log.WARN, "PIN_SYNC_FROM_APP_STALE rev=$rev localRev=$localRev", null)
+                    if (localValue != raw) pushPinsToApp(localValue, localRev)
                 }
             }
         }
@@ -391,6 +458,16 @@ class FanHost(
     /** Spy stream died mid-gesture (system stole the gesture, multi-finger,
      *  ACTION_CANCEL) → collapse, mirroring the engine's Cancel path. */
     fun cancelExternal() = retract("STREAM_END")
+
+    /** Re-bind the fan's tiles from the current pins/apps without waiting for a new stroke. */
+    private fun rebindFanIfBusy() {
+        val snap = RemotePrefs.read(prefs)
+        mainHandler.post {
+            if (dock.isBusy) {
+                dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend)
+            }
+        }
+    }
 
     private fun retract(source: String) {
         pressureDetector.stopListening()

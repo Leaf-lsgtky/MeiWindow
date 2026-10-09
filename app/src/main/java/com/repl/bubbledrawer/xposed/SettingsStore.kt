@@ -6,6 +6,7 @@ import androidx.compose.runtime.Immutable
 import com.repl.bubbledrawer.data.PinBackend
 import com.repl.bubbledrawer.data.PinCodec
 import com.repl.bubbledrawer.data.PinnedRef
+import com.repl.bubbledrawer.data.PinsSync
 import com.repl.bubbledrawer.data.PrefsPinBackend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
@@ -178,35 +179,96 @@ object SettingsStore {
     }
 
     /** Pin backend: remote file when connected, local mirror otherwise; writes
-     *  go to BOTH so the offline cache never diverges (syncLocal re-pushes). */
+     *  go to BOTH so the offline cache never diverges (syncLocal re-pushes).
+     *
+     *  READS RECONCILE (see [PinsSync] / [PinBackend.readRev]): the two stores used to each
+     *  prefer their own copy, so one lost handoff between this process and the SystemUI panel
+     *  left the app's 收藏 and the panel's 收藏 disagreeing forever. Now the newer stamp wins
+     *  and the loser is rewritten, so a single read on either side heals the split. */
     fun pinBackend(context: Context): PinBackend = object : PinBackend {
+        private val local get() = PrefsPinBackend(fallbackMirror(context))
+
         override fun read(): String {
-            val localPins = fallbackMirror(context).getString(PrefsPinBackend.KEY, null)
-            if (!localPins.isNullOrEmpty()) return localPins
-            val r = RemoteBridge.remote
-            if (r != null) {
-                val remotePins = PrefsPinBackend(r).read()
-                if (remotePins.isNotEmpty()) {
-                    fallbackMirror(context).edit().putString(PrefsPinBackend.KEY, remotePins).commit()
-                    return remotePins
+            val localBackend = local
+            val remotePrefs = RemoteBridge.remote ?: return localBackend.read()
+            val remoteBackend = PrefsPinBackend(remotePrefs)
+
+            val decision = PinsSync.decide(
+                localValue = localBackend.read(),
+                localRev = localBackend.readRev(),
+                remoteValue = remoteBackend.read(),
+                remoteRev = remoteBackend.readRev(),
+            )
+            when (decision.source) {
+                PinsSync.Source.REMOTE -> {
+                    localBackend.write(decision.value)
+                    localBackend.writeRev(decision.rev)
                 }
+                PinsSync.Source.LOCAL -> if (decision.pushBack) {
+                    // Our mirror is ahead of the shared group (a write landed while LSPosed was
+                    // not connected): push it back so the hook process and the next app start
+                    // see the same list.
+                    runCatching {
+                        remoteBackend.write(decision.value)
+                        remoteBackend.writeRev(decision.rev)
+                    }
+                }
+                PinsSync.Source.NONE -> Unit
             }
-            return ""
+            return decision.value
         }
 
         override fun write(value: String) {
-            fallbackMirror(context).edit().putString(PrefsPinBackend.KEY, value).commit()
+            val rev = System.currentTimeMillis()
+            val localBackend = local
+            localBackend.write(value)
+            localBackend.writeRev(rev)
             val r = RemoteBridge.remote
             if (r != null) {
-                r.edit().putString(PrefsPinBackend.KEY, value).commit()
+                runCatching {
+                    val remoteBackend = PrefsPinBackend(r)
+                    remoteBackend.write(value)
+                    remoteBackend.writeRev(rev)
+                }
             } else {
                 RemoteBridge.start(context)
             }
+            broadcastPins(context, value, rev)
+        }
+
+        override fun readRev(): Long = local.readRev()
+
+        override fun writeRev(rev: Long) {
+            local.writeRev(rev)
+            RemoteBridge.remote?.let { runCatching { PrefsPinBackend(it).writeRev(rev) } }
+        }
+    }
+
+    /**
+     * Apply pins pushed here by the SystemUI panel, KEEPING the sender's stamp: re-stamping
+     * with "now" would make a late/duplicate delivery look newer than a local edit made after
+     * it. No broadcast back — the sender is the one that just wrote them.
+     */
+    fun applyPushedPins(context: Context, value: String, rev: Long) {
+        val local = PrefsPinBackend(fallbackMirror(context))
+        local.write(value)
+        local.writeRev(rev)
+        RemoteBridge.remote?.let { r ->
             runCatching {
-                val intent = android.content.Intent(PinSyncReceiver.ACTION_TO_SYSTEMUI)
-                    .putExtra(PinSyncReceiver.EXTRA_PINS, value)
-                context.sendBroadcast(intent)
+                val remote = PrefsPinBackend(r)
+                remote.write(value)
+                remote.writeRev(rev)
             }
+        }
+    }
+
+    /** Hand the pin order to the SystemUI side (its FanHost receiver applies it). */
+    fun broadcastPins(context: Context, value: String, rev: Long) {
+        runCatching {
+            val intent = android.content.Intent(PinSyncReceiver.ACTION_TO_SYSTEMUI)
+                .putExtra(PinSyncReceiver.EXTRA_PINS, value)
+                .putExtra(PinSyncReceiver.EXTRA_REV, rev)
+            context.sendBroadcast(intent)
         }
     }
 

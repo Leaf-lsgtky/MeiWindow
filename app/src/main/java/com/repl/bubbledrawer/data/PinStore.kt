@@ -20,6 +20,22 @@ data class PinnedRef(val packageName: String, val userId: Int = 0)
 interface PinBackend {
     fun read(): String
     fun write(value: String)
+
+    /**
+     * Freshness stamp of [read]'s value — epoch millis of the write that produced it,
+     * 0 when the backend never stamped one (legacy data).
+     *
+     * WHY IT EXISTS: the pins live in TWO stores that both used to prefer their own copy —
+     * the app's `cfg` mirror and SystemUI's `bubbledrawer_pins` — and were kept together by
+     * one broadcast in each direction. A single lost handoff (module app force-stopped by
+     * HyperOS, receiver not yet registered after a reload, …) left the two copies different
+     * FOREVER: neither side ever looked at the other's value again, so the app's 收藏 and the
+     * fan panel's 收藏 disagreed with no way back. With a stamp, the older copy is simply
+     * replaced by the newer one (see [PinsSync.decide]).
+     */
+    fun readRev(): Long = 0L
+
+    fun writeRev(rev: Long) {}
 }
 
 class PrefsPinBackend(private val prefs: android.content.SharedPreferences) : PinBackend {
@@ -27,7 +43,16 @@ class PrefsPinBackend(private val prefs: android.content.SharedPreferences) : Pi
     override fun write(value: String) {
         prefs.edit().putString(KEY, value).commit()
     }
-    companion object { const val KEY = "long_press_app" } // same key name as the original Global setting
+
+    override fun readRev(): Long = prefs.getLong(KEY_REV, 0L)
+    override fun writeRev(rev: Long) {
+        prefs.edit().putLong(KEY_REV, rev).commit()
+    }
+
+    companion object {
+        const val KEY = "long_press_app" // same key name as the original Global setting
+        const val KEY_REV = "long_press_app_rev"
+    }
 }
 
 object PinCodec {
