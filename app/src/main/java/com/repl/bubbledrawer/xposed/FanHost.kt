@@ -821,15 +821,21 @@ class FanHost(
         panelLog("MORE_PANEL_HIDE")
     }
 
-    /** Panel app click → hand the very same spot to the app (Flyme: content swap). */
+    /**
+     * Panel app click → launch exactly like a fan tile does.
+     *
+     * The panel's rect used to be handed over as the window's launch bounds, which gave the
+     * 更多 panel's own shape (976x1859 here) to an app opened from it, while the fan gave the
+     * ROM's small-window geometry (1220x1952) — two different shapes for the same action.
+     * User ruling 2026-10-09: "面板矩形不应该存在，扇形打开的小窗和更多里打开的小窗应该一致";
+     * the 更多 panel's own size remains a user setting and no longer leaks into the window.
+     */
     private fun launchFromPanel(app: com.repl.bubbledrawer.pinyin.BubbleApp) {
         val rect = moreRect
         hideMorePanel(animated = false)
         val snap = RemotePrefs.read(prefs)
         val strategy: ILaunchStrategy =
-            if (snap.freeform) {
-                if (snap.flymeFreeformEnabled) FreeformLaunchStrategy() else FreeformLaunchStrategy(rect)
-            } else FullscreenLaunchStrategy()
+            if (snap.freeform) FreeformLaunchStrategy() else FullscreenLaunchStrategy()
         val ok = runCatching { strategy.launch(context, app) }.getOrDefault(false)
         LaunchCountStore.increment(context, app.packageName, app.userId)
         com.repl.bubbledrawer.data.predict.AppPredictor.recordLaunch(context, app.packageName, app.userId)

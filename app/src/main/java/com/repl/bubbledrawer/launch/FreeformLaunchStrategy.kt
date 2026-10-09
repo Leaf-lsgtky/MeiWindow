@@ -184,20 +184,22 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
         }
     }
 
-    /** HyperOS path — `MiuiMultiWindowUtils.getActivityOptions(...)`, positioned when asked. */
+    /**
+     * HyperOS path — `MiuiMultiWindowUtils.getActivityOptions(...)`.
+     *
+     * POSITION IS NOT GEOMETRY (user ruling 2026-10-09): the small window always takes the ROM's
+     * own小窗 rectangle, whether it was opened from a fan tile or from a tile inside the 更多
+     * panel — "扇形打开的小窗和更多里打开的小窗应该一致". Passing the panel's rect used to
+     * shrink/stretch the window to the panel's shape (976x1859 on this phone vs the ROM's
+     * 1220x1952), which is exactly the inconsistency reported. The 更多 panel's own size stays a
+     * user setting and is untouched. [position] therefore only survives as the source-bounds hint
+     * for the launcher-animation path and for [aospOptions] on ROMs with no MIUI geometry.
+     */
     private fun miuiOptions(context: Context, pkg: String): ActivityOptions? {
-        val snap = com.repl.bubbledrawer.xposed.SettingsStore.snapshot(context)
-        val pos = if (snap.flymeFreeformEnabled) null else position
-
-        return (MiuiFreeform.activityOptions(context, pkg, noCheck = true, position = pos)
+        return (MiuiFreeform.activityOptions(context, pkg, noCheck = true, position = null)
             // `getActivityOptions` is gated by checkAuthority() (third-party callers get
             // null); the ROM's own builder is not, and is what its sidebar linkage uses.
-            ?: MiuiFreeform.makeActivityOptions(
-                context,
-                pkg,
-                pos?.left ?: MiuiFreeform.POS_AUTO,
-                pos?.top ?: MiuiFreeform.POS_AUTO,
-            )
+            ?: MiuiFreeform.makeActivityOptions(context, pkg)
             ?: ActivityOptions.makeBasic().also {
                 runCatching {
                     ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
@@ -205,11 +207,6 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
                 }
             })
             .let { MiuiFreeform.withoutFreeformAnimation(it) }
-            .also { opts ->
-                if (pos != null) {
-                    runCatching { opts.setLaunchBounds(pos) }
-                }
-            }
     }
 
     /**
