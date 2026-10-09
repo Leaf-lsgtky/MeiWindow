@@ -42,7 +42,7 @@ object Sections {
         pins: List<PinnedRef>,
         recommend: Boolean,
     ): ImmutableList<Cell> {
-        val pinnedPkgs = pins.map { it.packageName }.toSet()
+        val pinnedKeys = pins.map { "${it.packageName}#${it.userId}" }.toSet()
         val out = ArrayList<Cell>()
 
         out.add(Cell.PinHead)
@@ -59,7 +59,7 @@ object Sections {
         }
 
         if (recommend) {
-            val rec = all.filter { it.usageCount > 0 && it.packageName !in pinnedPkgs }
+            val rec = all.filter { it.usageCount > 0 && "${it.packageName}#${it.userId}" !in pinnedKeys }
                 .sortedByDescending { it.usageCount }
                 .take(RECOMMEND_TOP_N)
             if (rec.isNotEmpty()) {
@@ -70,7 +70,7 @@ object Sections {
 
         val groups = LinkedHashMap<String, MutableList<BubbleApp>>()
         for (app in all) {
-            if (app.packageName in pinnedPkgs) continue
+            if ("${app.packageName}#${app.userId}" in pinnedKeys) continue
             groups.getOrPut(AppSortKey.groupOf(app.sortKey)) { ArrayList() }.add(app)
         }
         for (k in groups.keys.sortedWith(AppSortKey.SECTION_LETTER)) {

@@ -1,5 +1,6 @@
 package com.repl.bubbledrawer.pin
 
+import android.content.res.Configuration
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -40,6 +41,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -50,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import com.repl.bubbledrawer.R
+import com.repl.bubbledrawer.data.AppRepository
 import com.repl.bubbledrawer.pinyin.BubbleApp
 import com.repl.bubbledrawer.ui.theme.StatusColors
 import com.repl.bubbledrawer.ui.util.BlurredBar
@@ -107,10 +110,14 @@ fun PinManageScreen(
         if (model.cells.isNotEmpty()) gridState.scrollToItem(0)
     }
 
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val gridSpan = if (isLandscape) 6 else 4
+
     Box(Modifier.fillMaxSize()) {
         val topContentPadding = if (chrome == Chrome.PANEL) 56.dp else topPadding.calculateTopPadding()
         LazyVerticalGrid(
-            columns = GridCells.Fixed(GRID_SPAN),
+            columns = GridCells.Fixed(gridSpan),
             state = gridState,
             modifier = Modifier
                 .fillMaxSize()
@@ -128,7 +135,7 @@ fun PinManageScreen(
                 items = model.cells,
                 key = { _, cell -> cellKey(cell) },
                 span = { _, cell ->
-                    if (cell is Cell.Pin || cell is Cell.App) GridItemSpan(1) else GridItemSpan(GRID_SPAN)
+                    if (cell is Cell.Pin || cell is Cell.App) GridItemSpan(1) else GridItemSpan(gridSpan)
                 },
             ) { index, cell ->
                 when (cell) {
@@ -155,7 +162,7 @@ fun PinManageScreen(
                     )
                 }
             }
-            item(key = "bottom", span = { GridItemSpan(GRID_SPAN) }) { PageBottomSpacer() }
+            item(key = "bottom", span = { GridItemSpan(gridSpan) }) { PageBottomSpacer() }
         }
 
         if (chrome == Chrome.PANEL) {
@@ -433,9 +440,11 @@ private fun AppTile(
 private fun AppIcon(app: BubbleApp, size: androidx.compose.ui.unit.Dp) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val bitmap = remember(app.packageName, size) {
+    val bitmap = remember(app.packageName, app.userId, size) {
         val px = with(density) { size.roundToPx() }
-        runCatching { context.packageManager.getApplicationIcon(app.packageName).toBitmap(px) }.getOrNull()
+        val iconDrawable = AppRepository.getIcon(context, app)
+            ?: runCatching { context.packageManager.getApplicationIcon(app.packageName) }.getOrNull()
+        iconDrawable?.toBitmap(px)
     }
     if (bitmap != null) {
         Image(

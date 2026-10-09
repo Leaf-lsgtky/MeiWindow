@@ -96,7 +96,7 @@ class PinManageActivity : ComponentActivity() {
                             // ORIGINAL: view-mode tap launches the app (AbstractC2806s.m9105e
                             // carries start_windowmode=true)
                             ConfigurableLaunchStrategy(this@PinManageActivity).launch(this@PinManageActivity, app)
-                            LaunchCountStore.increment(this@PinManageActivity, app.packageName)
+                            LaunchCountStore.increment(this@PinManageActivity, app.packageName, app.userId)
                         },
                         onClose = null,
                         onToggleManage = model::toggleManageMode,

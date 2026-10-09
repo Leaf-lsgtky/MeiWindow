@@ -50,7 +50,10 @@ object AppSortKey {
      */
     val DEFAULT: Comparator<BubbleApp> = Comparator { a, b ->
         if (b.usageCount != a.usageCount) b.usageCount - a.usageCount
-        else a.sortKey.compareTo(b.sortKey)
+        else {
+            val s = a.sortKey.compareTo(b.sortKey)
+            if (s != 0) s else a.userId.compareTo(b.userId)
+        }
     }
 
     /** `C2874h` (:456-469): non-letter first char goes last, else compareTo. */

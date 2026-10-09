@@ -60,7 +60,7 @@ class BubbleDockController(
                 when (item) {
                     is GestureAppLauncher.AdapterItem.AppItem -> {
                         launchStrategy.launch(context, item.app)
-                        LaunchCountStore.increment(context, item.app.packageName)
+                        LaunchCountStore.increment(context, item.app.packageName, item.app.userId)
                     }
                     GestureAppLauncher.AdapterItem.More -> {
                         // VERIFIED: original fan's trailing "更多" tile (C2821f.mo3456G

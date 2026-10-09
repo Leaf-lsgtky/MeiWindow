@@ -499,9 +499,9 @@ class FanHost(
         val strategy: ILaunchStrategy =
             if (snap.freeform) FreeformLaunchStrategy(rect) else FullscreenLaunchStrategy()
         val ok = runCatching { strategy.launch(context, app) }.getOrDefault(false)
-        LaunchCountStore.increment(context, app.packageName)
+        LaunchCountStore.increment(context, app.packageName, app.userId)
         panelLog(
-            "MORE_LAUNCH " + app.packageName + " freeform=" + snap.freeform +
+            "MORE_LAUNCH " + app.packageName + "#" + app.userId + " freeform=" + snap.freeform +
                 " rect=" + (rect?.toShortString() ?: "-") + " ok=" + ok,
         )
     }

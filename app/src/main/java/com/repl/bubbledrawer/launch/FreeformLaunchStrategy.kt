@@ -3,8 +3,11 @@ package com.repl.bubbledrawer.launch
 import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
+import android.content.pm.LauncherApps
 import android.graphics.Rect
+import android.os.UserHandle
 import android.util.DisplayMetrics
+import com.repl.bubbledrawer.data.MultiUserHelper
 import com.repl.bubbledrawer.pinyin.BubbleApp
 
 /**
@@ -33,18 +36,56 @@ import com.repl.bubbledrawer.pinyin.BubbleApp
 class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrategy {
 
     override fun launch(context: Context, app: BubbleApp): Boolean {
-        val intent = context.packageManager.getLaunchIntentForPackage(app.packageName)
-            ?.apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                        Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED,
-                )
-            } ?: return false
+        val userHandle = MultiUserHelper.getUserHandle(app.userId)
+        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+        val act = if (userHandle != null && launcherApps != null) {
+            runCatching { launcherApps.getActivityList(app.packageName, userHandle).firstOrNull() }.getOrNull()
+        } else null
+
+        val intent = (if (act != null) {
+            Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                component = act.componentName
+            }
+        } else {
+            context.packageManager.getLaunchIntentForPackage(app.packageName)
+        })?.apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
+                    Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED,
+            )
+        } ?: return false
 
         val opts = miuiOptions(context, app.packageName) ?: aospOptions(context)
+        val bundle = opts.toBundle()
+
+        if (app.userId != 0 && userHandle != null) {
+            // 1. Reflective Context.startActivityAsUser (works directly in SystemUI)
+            val asUserOk = runCatching {
+                val method = Context::class.java.getMethod(
+                    "startActivityAsUser",
+                    Intent::class.java,
+                    android.os.Bundle::class.java,
+                    UserHandle::class.java,
+                )
+                method.invoke(context, intent, bundle, userHandle)
+                true
+            }.getOrElse { false }
+            if (asUserOk) return true
+
+            // 2. Public LauncherApps.startMainActivity
+            if (act != null && launcherApps != null) {
+                val launcherOk = runCatching {
+                    launcherApps.startMainActivity(act.componentName, userHandle, position, bundle)
+                    true
+                }.getOrElse { false }
+                if (launcherOk) return true
+            }
+        }
+
         return try {
-            context.startActivity(intent, opts.toBundle())
+            context.startActivity(intent, bundle)
             true
         } catch (_: Exception) {
             try {
@@ -90,8 +131,8 @@ class ConfigurableLaunchStrategy(private val context: Context) : ILaunchStrategy
     private val freeform = FreeformLaunchStrategy()
     private val fullscreen = FullscreenLaunchStrategy()
 
-    override fun launch(ctx: Context, app: BubbleApp): Boolean {
-        val useFreeform = com.repl.bubbledrawer.xposed.SettingsStore.snapshot(context).freeform
-        return (if (useFreeform) freeform else fullscreen).launch(ctx, app)
+    override fun launch(context: Context, app: BubbleApp): Boolean {
+        val useFreeform = com.repl.bubbledrawer.xposed.SettingsStore.snapshot(this.context).freeform
+        return (if (useFreeform) freeform else fullscreen).launch(context, app)
     }
 }
