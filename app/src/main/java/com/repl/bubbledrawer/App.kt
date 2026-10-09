@@ -13,6 +13,13 @@ object AppGraph {
 }
 
 class BubbleAppApplication : Application() {
+    override fun attachBaseContext(base: android.content.Context) {
+        super.attachBaseContext(base)
+        runCatching {
+            org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("")
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         com.repl.bubbledrawer.xposed.RemoteBridge.start(this)

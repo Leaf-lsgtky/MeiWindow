@@ -27,10 +27,12 @@ class FullscreenLaunchStrategy : ILaunchStrategy {
             runCatching { launcherApps.getActivityList(app.packageName, userHandle).firstOrNull() }.getOrNull()
         } else null
 
-        val i = (if (act != null) {
+        val comp = act?.componentName ?: MultiUserHelper.findComponentForPackage(context, app.packageName, app.userId)
+
+        val i = (if (comp != null) {
             Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
-                component = act.componentName
+                component = comp
             }
         } else {
             context.packageManager.getLaunchIntentForPackage(app.packageName)
@@ -50,9 +52,9 @@ class FullscreenLaunchStrategy : ILaunchStrategy {
             }.getOrElse { false }
             if (asUserOk) return true
 
-            if (act != null && launcherApps != null) {
+            if (comp != null && launcherApps != null) {
                 val launcherOk = runCatching {
-                    launcherApps.startMainActivity(act.componentName, userHandle, null, null)
+                    launcherApps.startMainActivity(comp, userHandle, null, null)
                     true
                 }.getOrElse { false }
                 if (launcherOk) return true

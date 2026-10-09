@@ -42,15 +42,16 @@ class ModuleMain : XposedModule() {
         // (Helper.java). MUST run before any of those classes is resolved.
         val exempted = runCatching {
             org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions(
+                "",
                 "Landroid/view/InputMonitor;",
                 "Landroid/view/InputChannel;",
                 "Landroid/view/InputEventReceiver;",
                 "Landroid/view/InputEvent;",
                 "Landroid/hardware/input/InputManagerGlobal;",
                 "Landroid/hardware/input/InputManager;",
-                // getInputMethodWindowVisibleHeight() — read once per corner DOWN to decide
-                // whether the keyboard owns that corner right now (see imeVisibleHeightPx).
                 "Landroid/view/inputmethod/InputMethodManager;",
+                "Landroid/app/ActivityThread;",
+                "Landroid/content/pm/IPackageManager;",
             )
         }.getOrDefault(false)
         log(if (exempted) Log.INFO else Log.WARN, TAG, "HIDDEN_API_EXEMPT=$exempted")

@@ -42,10 +42,12 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
             runCatching { launcherApps.getActivityList(app.packageName, userHandle).firstOrNull() }.getOrNull()
         } else null
 
-        val intent = (if (act != null) {
+        val comp = act?.componentName ?: MultiUserHelper.findComponentForPackage(context, app.packageName, app.userId)
+
+        val intent = (if (comp != null) {
             Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
-                component = act.componentName
+                component = comp
             }
         } else {
             context.packageManager.getLaunchIntentForPackage(app.packageName)
@@ -75,9 +77,9 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
             if (asUserOk) return true
 
             // 2. Public LauncherApps.startMainActivity
-            if (act != null && launcherApps != null) {
+            if (comp != null && launcherApps != null) {
                 val launcherOk = runCatching {
-                    launcherApps.startMainActivity(act.componentName, userHandle, position, bundle)
+                    launcherApps.startMainActivity(comp, userHandle, position, bundle)
                     true
                 }.getOrElse { false }
                 if (launcherOk) return true
