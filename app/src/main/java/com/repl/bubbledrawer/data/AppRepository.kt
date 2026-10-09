@@ -98,6 +98,10 @@ object MultiUserHelper {
     fun getAllUserIds(context: Context): List<Int> {
         val userIds = linkedSetOf<Int>()
         userIds.add(0)
+        // Users the UserManager itself reported, so "does user 999 exist" can be answered
+        // without `getUserInfo(int)` (hidden API; `UserManager.getUserInfo(int)` is not in the
+        // public SDK — the compile against android-37 rejected it).
+        val knownUsers = mutableSetOf<Int>()
 
         val um = context.getSystemService(Context.USER_SERVICE) as? UserManager
         if (um != null) {
@@ -110,6 +114,7 @@ object MultiUserHelper {
                         val idField = it.javaClass.getField("id")
                         val id = idField.getInt(it)
                         userIds.add(id)
+                        knownUsers.add(id)
                     }
                 }
             }.onFailure { Log.d(TAG, "getAliveUsers reflection failed: ${it.message}") }
@@ -117,18 +122,29 @@ object MultiUserHelper {
             // Standard approach: userProfiles
             runCatching {
                 um.userProfiles.forEach { profile ->
-                    userIds.add(getUserId(profile))
+                    val id = getUserId(profile)
+                    userIds.add(id)
+                    knownUsers.add(id)
                 }
             }.onFailure { Log.d(TAG, "userProfiles lookup failed: ${it.message}") }
         }
 
-        // HyperOS / MIUI XSpace User 999 check
+        // HyperOS / MIUI XSpace User 999 check.
+        //
+        // `getUserHandle(999)` used to stand in for "does user 999 exist" — but it only calls
+        // `UserHandle.of(999)`, which never returns null, so 999 was added on EVERY device and
+        // every load then ran the whole "is pkg installed for 999" fallback below (one binder
+        // round-trip per app, measured 216 on this phone) against a user that is not there.
+        // Verified on device 2026-10-09 with 双开 switched off: `settings get secure
+        // xspace_enabled` = 0, `pm list users` = user 0 only, while the module still logged
+        // `Discovered userIds: [0, 999]`. The ROM flag stays the primary signal (XSpace users
+        // are hidden from `pm list users` on some builds); UserManager's own list is the second.
         if (!userIds.contains(999)) {
             val xspaceEnabled = runCatching {
                 android.provider.Settings.Secure.getInt(context.contentResolver, "xspace_enabled", 0) == 1
             }.getOrDefault(false)
 
-            if (xspaceEnabled || getUserHandle(999) != null) {
+            if (xspaceEnabled || knownUsers.contains(999)) {
                 userIds.add(999)
             }
         }
@@ -274,14 +290,48 @@ object MultiUserHelper {
 /**
  * Enumerates launchable apps across all user profiles (including HyperOS XSpace 999)
  * and caches icons with official badges.
+ *
+ * ## The cache is only as good as the moment it was filled
+ *
+ * The fan and its 更多 panel live inside SystemUI, and SystemUI's own module install runs
+ * at BOOT — i.e. while the user is still locked. In that state the platform's package
+ * queries answer with a tiny, direct-boot-shaped subset (measured on device 2026-10-09:
+ * `AppRepository.loadAll` → 2 apps, 设置 + 联系人, versus 216 once unlocked; `uid=10231`
+ * `com.android.systemui`, probe in `AppEnumProbe`). Because [cache] is per SystemUI
+ * process and every reader takes it as-is (`cachedAll()`), that boot-time subset used to
+ * survive the whole boot: after two reboots the panel showed those two apps only, while
+ * the module's own Activity (whose process starts after unlock) showed all of them.
+ *
+ * Hence [cacheNeedsRefresh]: a list enumerated while locked is PROVISIONAL, and every
+ * reader asks this before trusting it. FanHost additionally reloads on ACTION_USER_UNLOCKED.
  */
 class AppRepository(private val context: Context) {
 
     @Volatile
     private var cache: ImmutableList<BubbleApp> = kotlinx.collections.immutable.persistentListOf()
 
+    /** True when [cache] came from a query made while the user was still locked. */
+    @Volatile
+    private var cacheEnumeratedWhileLocked: Boolean = false
+
     /** Synchronous view of the last [loadAll] (bubble bar reads this on expand). */
     fun cachedAll(): ImmutableList<BubbleApp> = cache
+
+    /**
+     * True when the cache must not be trusted for display: it is empty, or it was filled
+     * while the user was locked and the device is unlocked now (the boot case above).
+     * Callers reload instead of showing a two-app "all apps" list.
+     */
+    fun cacheNeedsRefresh(): Boolean =
+        cache.isEmpty() || (cacheEnumeratedWhileLocked && userUnlocked(context))
+
+    /**
+     * The list every UI reads: the cache when it can be trusted, a fresh [loadAll] otherwise.
+     * This is the replacement for the old `cachedAll().ifEmpty { loadAll() }` idiom, which
+     * only noticed an EMPTY cache and therefore kept serving the boot's two-app answer.
+     */
+    suspend fun all(): ImmutableList<BubbleApp> =
+        if (cacheNeedsRefresh()) loadAll() else cache
 
     /** Synchronous lookup for a single app; resolves from LauncherApps/PackageManager if cache is cold. */
     fun findApp(packageName: String, userId: Int = 0): BubbleApp? {
@@ -392,8 +442,17 @@ class AppRepository(private val context: Context) {
 
         val sorted = allApps.sortedWith(AppSortKey.DEFAULT).toImmutableList()
         cache = sorted
+        // Remember HOW this list was obtained: a query made while the user is still locked
+        // answers with a tiny subset (see the class doc), and that answer must not outlive
+        // the unlock. [cacheNeedsRefresh] is what every reader checks.
+        cacheEnumeratedWhileLocked = !userUnlocked(context)
         val dualCount = sorted.count { it.userId == 999 }
-        Log.i(TAG, "loadAll finished. Total apps=${sorted.size}, User 999 dual apps=$dualCount (${sorted.filter { it.userId == 999 }.map { it.packageName }})")
+        Log.i(
+            TAG,
+            "loadAll finished. Total apps=${sorted.size}, User 999 dual apps=$dualCount " +
+                "(${sorted.filter { it.userId == 999 }.map { it.packageName }}) " +
+                "userUnlocked=${!cacheEnumeratedWhileLocked}",
+        )
 
         // Pre-warm top 50 icons in background to eliminate scroll hitching
         CoroutineScope(Dispatchers.IO).launch {
@@ -414,6 +473,19 @@ class AppRepository(private val context: Context) {
     companion object {
         private const val TAG = "MeiWindow_AppRepo"
         private val iconCache = LruCache<String, Drawable>(128)
+
+        /**
+         * Is the current user's credential-encrypted storage available?
+         *
+         * `UserManager.isUserUnlocked()` is the same signal the platform uses to decide how
+         * much of the package list an app-uid caller may see, so it is exactly the question
+         * [AppRepository.cacheNeedsRefresh] has to ask. Unknown answer → assume unlocked, so
+         * a missing service can never wedge the refresh path into reloading forever.
+         */
+        fun userUnlocked(context: Context): Boolean = runCatching {
+            val um = context.getSystemService(Context.USER_SERVICE) as? UserManager
+            um?.isUserUnlocked != false
+        }.getOrDefault(true)
 
         /**
          * Resolves the app icon with badging for multi-user / cloned apps.

@@ -201,6 +201,7 @@ class FanHost(
                 }
             }
         }
+        registerUnlockReceiver()
         // pins edits while the fan is open → live rebind (reference :85-96 watch pattern)
         pinsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == PrefsPinBackend.KEY) {
@@ -262,6 +263,64 @@ class FanHost(
 
     }
 
+    // ---------------- app list freshness (the boot/locked-enumeration trap) ----------------
+
+    private var unlockReceiver: android.content.BroadcastReceiver? = null
+
+    /**
+     * The module is injected into SystemUI at BOOT, i.e. while the user is still locked — and
+     * in that state the platform answers package queries with a tiny direct-boot-shaped
+     * subset. Measured on device (2026-10-09, uid 10231 com.android.systemui): the fan's own
+     * `AppRepository` enumerated **2** apps (设置 + 联系人) at boot versus **216** after
+     * unlock, and because that answer sits in `AppRepository.cache` for the life of this
+     * process, the 更多 panel showed those two apps until SystemUI was restarted by hand.
+     *
+     * Nothing else re-reads the list, so the unlock is the moment to do it: reload, then
+     * rebind whatever is on screen. [Intent.ACTION_BOOT_COMPLETED] is the belt-and-braces
+     * second chance (a device without a secure lock never gets USER_UNLOCKED, and there the
+     * boot-time answer was already correct).
+     */
+    private fun registerUnlockReceiver() {
+        if (unlockReceiver != null) return
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) = reloadApps(i?.action ?: "UNLOCK")
+        }
+        runCatching {
+            host.registerReceiver(
+                r,
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_USER_UNLOCKED)
+                    addAction(Intent.ACTION_BOOT_COMPLETED)
+                },
+                Context.RECEIVER_NOT_EXPORTED,
+            )
+        }.onSuccess {
+            unlockReceiver = r
+            logger(Log.INFO, "APP_LIST_RELOAD_ARMED", null)
+        }.onFailure { logger(Log.WARN, "APP_LIST_RELOAD_ARM_FAILED", it) }
+    }
+
+    /** Re-enumerate when the cached list cannot be trusted; rebind the open fan/panel. */
+    private fun reloadApps(reason: String) {
+        if (!repo.cacheNeedsRefresh()) {
+            logger(Log.INFO, "APP_LIST_RELOAD_SKIPPED reason=$reason total=${repo.cachedAll().size}", null)
+            return
+        }
+        scope.launch {
+            val total = runCatching { repo.loadAll() }.getOrNull()?.size ?: -1
+            logger(Log.INFO, "APP_LIST_RELOADED reason=$reason total=$total", null)
+            mainHandler.post {
+                val snap = RemotePrefs.read(prefs)
+                if (moreUp) {
+                    // The panel is reading the old list: rebuild it in place.
+                    moreContent?.reload()
+                } else if (dock.isBusy) {
+                    dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend)
+                }
+            }
+        }
+    }
+
     /** adb verification hook — see `CornerInputMonitor.registerDebugReceiver`. */
     fun toggleMorePanelForDebug() {
         if (moreUp) hideMorePanel() else showMorePanel()
@@ -286,6 +345,9 @@ class FanHost(
         val pm = host.getSystemService(PowerManager::class.java)
         if (pm?.isInteractive == false) return
         hideMorePanel(animated = false) // a fresh stroke always starts from the fan
+        // The fan renders tiles from the cached list; if that list is the boot's locked-user
+        // subset, refresh in the background so the NEXT stroke (and the 更多 panel) is whole.
+        if (repo.cacheNeedsRefresh()) reloadApps("FAN_SHOW")
         activeCorner = if (side == SpySide.LEFT) Corner.BOTTOM_LEFT else Corner.BOTTOM_RIGHT
         raiseFanWindows()
         dock.previewMode = false
@@ -552,7 +614,7 @@ class FanHost(
         // the View islands (LetterIndexBar) inside the Compose tree.
         val themed = ContextThemeWrapper(context, R.style.Theme_BubbleDrawer)
         val content = PinManageModel(
-            loadApps = { repo.cachedAll().ifEmpty { repo.loadAll() } },
+            loadApps = { repo.all() },
             pinsOf = { pinStore.pins() },
             onOrderChange = { order -> pinStore.setPins(order) },
             recommendConfig = {
@@ -624,6 +686,21 @@ class FanHost(
             moreCatcher = null
             return
         }
+        // Ground truth for "which page is in the panel?" — one line per rebuild. It has to come
+        // from the model's own rebuild callback: the load is asynchronous (app list + the
+        // recommendation pass), so logging right here and one frame later only ever printed
+        // the empty initial state (items=0 letters=0) for a panel that was visibly full.
+        content.onContentChanged = {
+            val page = if (moreUp && moreContent === content) {
+                content.describe(
+                    themed.resources.getString(R.string.slide_launcher_tab_all_app),
+                    themed.resources.getString(R.string.slide_launch_app_has_selected),
+                )
+            } else {
+                "closed-before-rebuild"
+            }
+            panelLog("MORE_PANEL_TREE $page")
+        }
         content.reload()
         panel.animate().alpha(1f).setDuration(FADE).start()
         morePanel = panel
@@ -638,16 +715,6 @@ class FanHost(
                     themed.resources.getString(R.string.slide_launch_app_has_selected),
                 ),
         )
-        // Ground truth for "which page is in the panel?" — one line per open, no screenshot
-        // and no 700 ms race (a fresh stroke may silently take the panel down before that).
-        panel.post {
-            panelLog(
-                "MORE_PANEL_TREE " + (moreContent?.describe(
-                    themed.resources.getString(R.string.slide_launcher_tab_all_app),
-                    themed.resources.getString(R.string.slide_launch_app_has_selected),
-                ) ?: "closed-before-layout"),
-            )
-        }
     }
 
     /** Panel diagnostics: LSPosed's module log (lagged) plus logcat for live reading. */
@@ -781,6 +848,8 @@ class FanHost(
     fun destroy() {
         screenOffReceiver?.let { runCatching { host.unregisterReceiver(it) } }
         screenOffReceiver = null
+        unlockReceiver?.let { runCatching { host.unregisterReceiver(it) } }
+        unlockReceiver = null
         syncFromAppReceiver?.let { runCatching { host.unregisterReceiver(it) } }
         syncFromAppReceiver = null
         pinsListener?.let { runCatching { prefs.unregisterOnSharedPreferenceChangeListener(it) } }

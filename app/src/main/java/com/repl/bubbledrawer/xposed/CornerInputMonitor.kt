@@ -233,12 +233,18 @@ class CornerInputMonitor(
         registerDebugReceiver()
         // Pre-warm FanHost and cached apps in background so the very first swipe has apps ready
         mainHandler.post { runCatching { ensureFan() } }
+        // Enumeration ground truth for the fan's data source (this process's uid) — install
+        // time is exactly the state a reboot leaves behind, which is what the panel bug needs
+        // compared against a later DEBUG_PROBE run. See AppEnumProbe.
+        Thread { runCatching { AppEnumProbe.run(context, logger, deep = false) } }.start()
     }
 
     /**
      * Verification aid (docs/test-plan-device.md A5): toggle the 更多 overlay without
      * walking the corner gesture —
      *   adb shell am broadcast -a com.repl.bubbledrawer.action.DEBUG_MORE
+     * plus the fan-data probe (AppEnumProbe) —
+     *   adb shell am broadcast -a com.repl.bubbledrawer.action.DEBUG_PROBE
      * Registered here (not in FanHost) on purpose: FanHost is built lazily on the first
      * claimed stroke, so a receiver living there would be dead until a successful gesture.
      */
@@ -246,18 +252,24 @@ class CornerInputMonitor(
         if (debugReceiver != null) return
         val r = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: android.content.Context?, i: android.content.Intent?) {
-                mainHandler.post { ensureFan().toggleMorePanelForDebug() }
+                when (i?.action) {
+                    ACTION_DEBUG_MORE -> mainHandler.post { ensureFan().toggleMorePanelForDebug() }
+                    AppEnumProbe.ACTION -> Thread { runCatching { AppEnumProbe.run(context, logger) } }.start()
+                }
             }
         }
         runCatching {
             context.registerReceiver(
                 r,
-                android.content.IntentFilter(ACTION_DEBUG_MORE),
+                android.content.IntentFilter().apply {
+                    addAction(ACTION_DEBUG_MORE)
+                    addAction(AppEnumProbe.ACTION)
+                },
                 android.content.Context.RECEIVER_EXPORTED,
             )
         }.onSuccess {
             debugReceiver = r
-            logger(Log.INFO, "DEBUG_MORE_READY action=$ACTION_DEBUG_MORE", null)
+            logger(Log.INFO, "DEBUG_MORE_READY action=$ACTION_DEBUG_MORE probe=${AppEnumProbe.ACTION}", null)
         }.onFailure { logger(Log.WARN, "DEBUG_MORE_REGISTER_FAILED", it) }
     }
 

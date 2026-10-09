@@ -9,3 +9,9 @@ local.properties
 *.keystore
 *.apk
 release.jks
+
+# local device-debug dumps (screenshots / logcat captures / pulled files)
+work_tables/*.png
+work_tables/*.log
+work_tables/*.txt
+work_tables/*.tgz

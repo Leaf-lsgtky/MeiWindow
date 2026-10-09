@@ -61,7 +61,7 @@ class PinManageActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val model = PinManageModel(
-            loadApps = { repo.cachedAll().ifEmpty { repo.loadAll() } },
+            loadApps = { repo.all() },
             pinsOf = { pinStore.pins() },
             onOrderChange = { order -> pinStore.setPins(order) },
             recommendConfig = {

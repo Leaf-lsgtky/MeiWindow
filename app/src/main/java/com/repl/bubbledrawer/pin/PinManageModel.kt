@@ -110,6 +110,17 @@ class PinManageModel(
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    /**
+     * Fired once [cells]/[letters] have actually been (re)built.
+     *
+     * The host used to log `describe()` right after [reload] and one frame later — both
+     * BEFORE the load coroutine finished, so the "ground truth" line always read
+     * `items=0 letters=0` even on a page full of apps (device log 2026-10-09: panel visibly
+     * complete while every MORE_PANEL_TREE line said 0). The rebuild is the only moment the
+     * page content is known, so that is where the host is told.
+     */
+    var onContentChanged: (() -> Unit)? = null
+
     @MainThread
     fun reload() {
         scope.launch {
@@ -177,6 +188,7 @@ class PinManageModel(
                     recommendedApps = recs,
                 )
                 letters = (listOf("★") + Sections.labelsOf(cells)).distinct()
+                onContentChanged?.invoke()
             }
         } else {
             cells = Sections.build(
@@ -186,6 +198,7 @@ class PinManageModel(
                 recommendCount = count,
             )
             letters = (listOf("★") + Sections.labelsOf(cells)).distinct()
+            onContentChanged?.invoke()
         }
     }
 
