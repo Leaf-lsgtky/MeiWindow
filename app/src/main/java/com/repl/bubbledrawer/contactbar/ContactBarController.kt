@@ -52,11 +52,28 @@ class ContactBarController(
     private val main = Handler(Looper.getMainLooper())
     private val recent = RecentConversations(host, logger)
 
+    /**
+     * Every window/view operation happens on the SystemUI **main** thread, whatever thread the event
+     * arrived on. The freeform hooks fire on the WMShell thread (`wmshell.main`) — a view created there
+     * belongs to that thread's ViewRootImpl, so a later refresh from the main thread (the notification
+     * listener posts there) dies with `CalledFromWrongThreadException: Expected: wmshell.main Calling:
+     * main`. Doing everything on main also means one Choreographer, one input thread, no interleaving.
+     */
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
+    }
+
+    /** The main thread's Choreographer — never `Choreographer.getInstance()` off-thread. */
+    @Volatile
+    private var mainChoreographer: Choreographer? = null
+
     /** Diagnostics go to LSPosed's module log and logcat (prefix `CONTACT_BAR_`). */
     private fun log(priority: Int, message: String) = logger(priority, message, null)
 
     private var view: ContactBarView? = null
     private var added = false
+
+    @Volatile
     private var frameScheduled = false
     private var frames = 0
     private var items: List<Conversation> = emptyList()
@@ -76,8 +93,8 @@ class ContactBarController(
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == RemotePrefs.KEY_CONTACT_BAR) {
-            main.post {
-                log(Log.INFO, "CONTACT_BAR_PREF_CHANGED enabled=${enabled()}")
+            onMain {
+                log(Log.INFO, "CONTACT_BAR_PREF_CHANGED enabled=${enabled()} thread=${Thread.currentThread().name}")
                 if (!enabled()) detach("PREF_OFF")
                 scheduleFrame()
             }
@@ -86,8 +103,11 @@ class ContactBarController(
 
     init {
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        // Bind the frame loop to the main thread's Choreographer up front (the constructor itself may
+        // run on the module's own thread after a hot reload).
+        onMain { mainChoreographer = Choreographer.getInstance() }
         RecentConversations.onChanged = {
-            main.post {
+            onMain {
                 // Capture first, then render: HyperOS cancels an app's notifications the moment the
                 // app is opened, so anything not remembered now would never reach the bar.
                 recent.observe()
@@ -96,12 +116,12 @@ class ContactBarController(
         }
         // Whatever is already posted when the module loads (install, SystemUI restart) counts as
         // recent conversations too.
-        main.post { recent.observe() }
+        onMain { recent.observe() }
     }
 
     // ---------------------------------------------------------------- FreeformObserver
 
-    override fun onFreeformTaskAppeared(taskInfo: Any) {
+    override fun onFreeformTaskAppeared(taskInfo: Any) = onMain {
         if (task !== taskInfo) {
             task = taskInfo
             currentPkg = null
@@ -121,9 +141,9 @@ class ContactBarController(
      * until either the task is gone or [CLOSE_LATCH_MS] passes — the latter so an aborted transition
      * cannot leave the bar permanently hidden.
      */
-    override fun onFreeformTaskClosing(taskId: Int) {
-        val current = task ?: return
-        if (FreeformTask.taskId(current) != taskId) return
+    override fun onFreeformTaskClosing(taskId: Int) = onMain {
+        val current = task ?: return@onMain
+        if (FreeformTask.taskId(current) != taskId) return@onMain
         log(Log.INFO, "CONTACT_BAR_TASK_CLOSING taskId=$taskId")
         closingUntil = SystemClock.uptimeMillis() + CLOSE_LATCH_MS
         detach("CLOSING")
@@ -133,7 +153,7 @@ class ContactBarController(
      * A resize/move gesture on a window: re-target if it is a different task, and track every frame
      * for the duration of the drag (the gesture is what `超宽度实时一致` hinges on).
      */
-    override fun onFreeformTaskFocused(taskInfo: Any) {
+    override fun onFreeformTaskFocused(taskInfo: Any) = onMain {
         if (task !== taskInfo) {
             task = taskInfo
             currentPkg = null
@@ -147,8 +167,8 @@ class ContactBarController(
         scheduleFrame()
     }
 
-    override fun onFreeformTaskVanished(taskId: Int) {
-        val current = task ?: return
+    override fun onFreeformTaskVanished(taskId: Int) = onMain {
+        val current = task ?: return@onMain
         if (FreeformTask.taskId(current) == taskId) {
             log(Log.INFO, "CONTACT_BAR_TASK_VANISHED taskId=$taskId")
             task = null
@@ -156,7 +176,7 @@ class ContactBarController(
         }
     }
 
-    override fun onFreeformTaskModeChanged(taskInfo: Any, oldMode: Int, newMode: Int) {
+    override fun onFreeformTaskModeChanged(taskInfo: Any, oldMode: Int, newMode: Int) = onMain {
         if (task !== taskInfo) task = taskInfo
         log(Log.INFO, "CONTACT_BAR_MODE_CHANGED old=$oldMode new=$newMode")
         // 0 = 普通小窗 (bar visible), 1/2/3 = 迷你/贴边 (bar must go away).
@@ -169,11 +189,19 @@ class ContactBarController(
     private fun scheduleFrame() {
         if (frameScheduled) return
         frameScheduled = true
-        Choreographer.getInstance().postFrameCallback(frameCallback)
+        onMain {
+            val choreographer = mainChoreographer ?: Choreographer.getInstance().also { mainChoreographer = it }
+            choreographer.postFrameCallback(frameCallback)
+        }
     }
 
     private val frameCallback = Choreographer.FrameCallback {
         frameScheduled = false
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            // Defensive: a callback must never touch views off the main thread.
+            scheduleFrame()
+            return@FrameCallback
+        }
         onFrame()
         if (task != null && enabled()) scheduleFrame()
     }
@@ -380,20 +408,20 @@ class ContactBarController(
 
     // ---------------------------------------------------------------- data
 
-    /** Rebuilds the avatar row for the app that currently owns the small window. */
-    fun refreshData(force: Boolean) {
-        val info = task ?: return
+    /** Rebuilds the avatar row for the app that currently owns the small window (main thread only). */
+    fun refreshData(force: Boolean) = onMain {
+        val info = task ?: return@onMain
         val pkg = FreeformTask.packageName(info)
         if (pkg == null || pkg !in RecentConversations.IM_WHITELIST) {
             items = emptyList()
             detach("NOT_IM_APP")
-            return
+            return@onMain
         }
         val list = recent.conversations(pkg, force)
-        if (list == items) return
+        if (list == items) return@onMain
         items = list
-        val v = view ?: return
-        val rect = lastRect ?: return
+        val v = view ?: return@onMain
+        val rect = lastRect ?: return@onMain
         v.bind(items, v.capacityFor(rect.width()), fallbackIcon(), ::openConversation, ::onRemoveConversation)
         log(
             Log.INFO,
@@ -521,11 +549,14 @@ class ContactBarController(
         )
     }
 
-    fun dispose() {
+    fun dispose() = onMain {
         runCatching { prefs.unregisterOnSharedPreferenceChangeListener(prefsListener) }
         if (RecentConversations.onChanged != null) RecentConversations.onChanged = null
         detach("DISPOSE")
         task = null
+        // Also unregister our notification listener: a hot reload replaces our classes but not the
+        // objects the previous generation registered inside SystemUI.
+        runCatching { RecentConversations.detachListener() }
         log(Log.INFO, "CONTACT_BAR_DISPOSED")
     }
 

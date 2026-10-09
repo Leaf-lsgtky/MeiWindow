@@ -99,7 +99,7 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - [ ] **实时拉伸小窗**：拖右下角改尺寸时，条宽逐帧跟随，不出现错位/滞后（日志
       `CONTACT_BAR_GEOM … visual=… bar=… animating=true`，`bar` 的 width 始终 == `visual` 的 width）；
       变宽后能多显示几个头像
-- [ ] **尺寸阈值**：设置页滑块（默认 35%）—— 把小窗拖到比阈值更窄 → 条消失（`CONTACT_BAR_HIDE reason=TOO_SMALL`）；
+- [ ] **尺寸阈值**：设置页滑块（默认 60%，= 小窗宽度须达到屏幕宽度的 60%）—— 把小窗拖到比阈值更窄 → 条消失（`CONTACT_BAR_HIDE reason=TOO_SMALL`）；
       拖回来 → 条回来；滑到 0 → 不再按尺寸隐藏
 - [ ] **上滑/下拉头像 → 移除该联系人**（`CONTACT_BAR_FORGET pkg=… title=…`）；移除最后一个后整条消失
       （`CONTACT_BAR_HIDE reason=EMPTY_AFTER_REMOVE`）；该会话来了**新消息**后应重新出现
@@ -116,7 +116,12 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - [ ] 小窗关闭后条消失（`CONTACT_BAR_HIDE reason=TASK_VANISHED`）
 - [ ] 关闭设置开关 → 立即消失（`CONTACT_BAR_PREF_CHANGED enabled=false`）
 - [ ] 新消息即时生效：小窗开着时来一条新微信 → 头像条刷新（未读红点出现在头像右上角）
-- [ ] **锁屏/解锁不崩**（回归：`NamedListenerSet.remove` 曾因监听代理 `equals` 返回 null 抛 NPE）
+- [ ] **锁屏/解锁不崩**（回归：`NamedListenerSet.remove` 曾因通知监听代理 `equals` 返回 null 抛 NPE）
+- [ ] **Flyme 样式小窗：点小窗外关闭不崩**（回归：`SurfaceControlInputReceiver.onInputEvent` 返回 void/bool 混用，
+      代理返回 null 会在 `InputEventReceiver.dispatchInputEvent` 拆箱 NPE）
+- [ ] 真机自测小窗命令（比手势快）：`adb shell am start --windowingMode 5 -n <pkg>/<activity>`
+      —— 注意这样拉起的是**较小**的 freeform 窗口（本机约屏幕宽 33%），默认 60% 阈值下会被
+      `TOO_SMALL` 隐藏，属预期；要看条可用手势开正常小窗或把阈值调低
 - [ ] 快捷判据：`adb logcat -s BubbleDrawer | findstr CONTACT_BAR`
       （启动时应有 `CONTACT_BAR_HOOKS_INSTALLED pipeline=true` 与 `CONTACT_BAR_NOTIF_LISTENER_ATTACHED`）
 

@@ -646,13 +646,13 @@ class FlymeFreeformController(
                         "equals" -> instance === args?.firstOrNull()
                         "hashCode" -> System.identityHashCode(instance)
                         "toString" -> "SurfaceControlInputReceiverProxy"
-                        "onInputEvent" -> {
-                            if (args != null && args.isNotEmpty()) {
-                                handleInputEvent(args[0] as? InputEvent)
-                            }
-                            null
-                        }
-                        else -> null
+                        // `onInputEvent` returns a PRIMITIVE boolean (consumed?). Returning null here
+                        // unboxes to a NullPointerException inside InputEventReceiver.dispatchInputEvent
+                        // on the very first event — i.e. as soon as the user taps outside the window.
+                        "onInputEvent" -> handleInputEvent(args?.firstOrNull() as? InputEvent)
+                        // Anything the framework adds later: answer with the return type's zero value
+                        // instead of null, so a primitive can never be unboxed from nothing.
+                        else -> proxyDefault(method.returnType)
                     }
                 }
 
@@ -806,8 +806,23 @@ class FlymeFreeformController(
         @Volatile var sForceFullscreenTransition = false
         @Volatile var sForceRebound = false
 
-        fun log(msg: String, error: Throwable? = null) {
-            if (error != null) {
+        /**
+         * The zero value for a proxy's declared return type — so an unhandled interface method can
+         * never hand `null` back to a caller that expects a primitive.
+         */
+        fun proxyDefault(type: Class<*>): Any? = when (type) {
+            java.lang.Boolean.TYPE -> false
+            java.lang.Integer.TYPE -> 0
+            java.lang.Long.TYPE -> 0L
+            java.lang.Float.TYPE -> 0f
+            java.lang.Double.TYPE -> 0.0
+            java.lang.Short.TYPE -> 0.toShort()
+            java.lang.Byte.TYPE -> 0.toByte()
+            java.lang.Character.TYPE -> ' '
+            else -> null
+        }
+
+        fun log(msg: String, error: Throwable? = null) {            if (error != null) {
                 Log.e(TAG, msg, error)
             } else {
                 Log.i(TAG, msg)

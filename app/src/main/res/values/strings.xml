@@ -104,5 +104,5 @@
     <string name="exp_contact_bar">显示最近联系人头像</string>
     <string name="exp_contact_bar_min_width">小窗宽度低于此值时隐藏</string>
     <string name="exp_contact_bar_min_width_off">不隐藏</string>
-    <string name="exp_contact_bar_summary">微信 / QQ 等应用以小窗打开时，在小窗下方显示最近聊天的联系人（头像 + 名称）：宽度始终与小窗一致并随拉伸实时变化，圆角与小窗一致；小窗变为迷你小窗、或缩小到阈值以下时自动隐藏。点击头像直接在该小窗内打开会话，在头像上上下滑动可移除该联系人。头像与名称来自系统通知，不读取应用数据；因 HyperOS 打开应用会清空其通知，模块会把会话记忆 12 小时。</string>
+    <string name="exp_contact_bar_summary" formatted="false">微信 / QQ 等应用以小窗打开时，在小窗下方显示最近聊天的联系人（头像 + 名称）：宽度始终与小窗一致并随拉伸实时变化，圆角与小窗一致；小窗变为迷你小窗、或缩小到阈值以下时自动隐藏。点击头像直接在该小窗内打开会话，在头像上上下滑动可移除该联系人。头像与名称来自系统通知，不读取应用数据；因 HyperOS 打开应用会清空其通知，模块会把会话记忆 12 小时。上方阈值按「小窗宽度 ÷ 屏幕宽度」计算：默认 60%（约等于 ROM 默认小窗 70% 宽度的 85%），嫌太敏感就往下调，0 = 完全不按尺寸隐藏。</string>
 </resources>

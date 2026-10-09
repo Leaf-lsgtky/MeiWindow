@@ -151,11 +151,10 @@ object RemotePrefs {
 
     /**
      * 联系人条的尺寸阈值：小窗可视宽度小于「屏幕宽度 × N%」时整条隐藏（0 = 不按尺寸隐藏）。
-     * 默认 35% —— 这台机器上 ROM 默认小窗的宽度约为屏幕的 70%，所以默认值等于
-     * "小窗缩到大约一半以下就不显示"。
+     * 默认 60%（用户 2026-10-09 指定）：小窗宽度约屏幕 70%，所以只要明显缩窄就隐藏。
      */
     const val KEY_CONTACT_BAR_MIN_WIDTH_PCT = "contact_bar_min_width_pct"
-    const val DEFAULT_CONTACT_BAR_MIN_WIDTH_PCT = 35
+    const val DEFAULT_CONTACT_BAR_MIN_WIDTH_PCT = 60
     const val CONTACT_BAR_MIN_WIDTH_MIN = 0
     const val CONTACT_BAR_MIN_WIDTH_MAX = 90
 

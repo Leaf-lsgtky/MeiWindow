@@ -307,6 +307,9 @@ class RecentConversations(
 
         private const val PROXY_NAME = "BubbleDrawerNotificationListener"
 
+        /** Every class this module ships lives under this prefix — how a stale proxy is recognised. */
+        private const val MODULE_PACKAGE = "com.repl.bubbledrawer"
+
         /** Flyme's own whitelist (`common/windowmode/model/AbstractC2304a.java:49-53`). */
         val IM_WHITELIST = setOf(
             "com.tencent.mm",
@@ -324,6 +327,10 @@ class RecentConversations(
 
         @Volatile
         private var listenerAttached = false
+
+        /** The proxy we registered, so [detachListener] can take it back out on hot reload. */
+        @Volatile
+        private var attachedProxy: Any? = null
 
         @Volatile
         private var listenerClassRef: Class<*>? = null
@@ -427,14 +434,76 @@ class RecentConversations(
                                 // expected — the memory keeps the bar populated (see the class KDoc).
                                 if (method.name == "onEntryRemoved") logRemoval(args?.firstOrNull())
                             }
-                            null
+                            // Never null: the listener interface is all-void today, but a future/other
+                            // method with a primitive return would blow up on unboxing (that exact bug
+                            // already cost us one SystemUI crash on the input-receiver proxy).
+                            com.repl.bubbledrawer.launch.FlymeFreeformController.proxyDefault(method.returnType)
                         }
                     }
                 }
+                // Drop proxies left behind by an earlier generation of this module BEFORE adding the
+                // new one. A hot reload replaces our classes but not the objects the previous
+                // generation already registered, and a stale proxy from a buggy build keeps crashing
+                // every `NamedListenerSet.remove` until the process restarts. Removal goes through the
+                // raw `listeners` list on purpose: the set's own `remove` compares with `equals`,
+                // which is exactly what must not be called on the object being cleaned up.
+                purgeModuleProxies(instance, module)
                 add.invoke(instance, proxy)
+                attachedProxy = proxy
                 listenerAttached = true
                 module.log(Log.INFO, TAG, "CONTACT_BAR_NOTIF_LISTENER_ATTACHED")
             }.onFailure { module.log(Log.WARN, TAG, "CONTACT_BAR_NOTIF_LISTENER_FAILED", it) }
+        }
+
+        /** The `NamedListenerSet` behind `NotifPipeline.mNotifCollection` — see the dump notes. */
+        private fun listenerList(pipeline: Any): java.util.Collection<Any?>? = runCatching {
+            val collection = pipeline.javaClass.getField("mNotifCollection").get(pipeline) ?: return null
+            val set = collection.javaClass.getField("mNotifCollectionListeners").get(collection) ?: return null
+            @Suppress("UNCHECKED_CAST")
+            set.javaClass.getField("listeners").get(set) as? java.util.Collection<Any?>
+        }.getOrNull()
+
+        /** `true` for a `java.lang.reflect.Proxy` this module created (any generation). */
+        private fun isModuleProxy(candidate: Any?): Boolean {
+            if (candidate == null || !Proxy.isProxyClass(candidate.javaClass)) return false
+            return runCatching {
+                Proxy.getInvocationHandler(candidate).javaClass.name.startsWith(MODULE_PACKAGE)
+            }.getOrDefault(false)
+        }
+
+        private fun purgeModuleProxies(pipeline: Any, module: XposedModule) {
+            runCatching {
+                val listeners = listenerList(pipeline) ?: return
+                var removed = 0
+                listeners.removeIf { wrapper ->
+                    val inner = runCatching {
+                        wrapper?.javaClass?.getField("listener")?.get(wrapper)
+                    }.getOrNull()
+                    val stale = isModuleProxy(inner)
+                    if (stale) removed++
+                    stale
+                }
+                if (removed > 0) {
+                    module.log(Log.INFO, TAG, "CONTACT_BAR_STALE_PROXY_PURGED removed=$removed", null)
+                }
+            }.onFailure { module.log(Log.WARN, TAG, "CONTACT_BAR_PURGE_FAILED", it) }
+        }
+
+        /**
+         * Unregister our listener. Called from `ContactBarController.dispose()` so a hot reload does
+         * not leave a proxy of the outgoing generation inside SystemUI's listener set.
+         */
+        fun detachListener() {
+            val pipeline = pipelineRef ?: return
+            val proxy = attachedProxy
+            runCatching {
+                val listeners = listenerList(pipeline) ?: return
+                listeners.removeIf { wrapper ->
+                    runCatching { wrapper?.javaClass?.getField("listener")?.get(wrapper) }.getOrNull() === proxy
+                }
+            }
+            attachedProxy = null
+            listenerAttached = false
         }
 
         /** Diagnostics hook (adb broadcast) — how many notifications the pipeline currently holds. */
