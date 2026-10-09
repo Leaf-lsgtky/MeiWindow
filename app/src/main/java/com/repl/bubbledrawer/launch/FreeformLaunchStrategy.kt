@@ -32,6 +32,36 @@ import com.repl.bubbledrawer.pinyin.BubbleApp
  *     as freeform when desktop mode is enabled; @hide
  *     `setLaunchWindowingMode(1)` where the ODM gate is on.
  *  3. Anything rejected → plain fullscreen launch (never worse than v0.1).
+ *
+ * ## Task identity: `NEW_TASK` only — never `MULTIPLE_TASK`
+ *
+ * The launch intent carries `FLAG_ACTIVITY_NEW_TASK` and nothing else, matching every 小窗
+ * launch this ROM performs itself:
+ *  - sidebar / gamebox — `FreeformUtil` (`com.miui.gamebooster.utils.AbstractC6721e0.m21981o`,
+ *    in the pulled `com.miui.securitycenter` APK) adds exactly `addFlags(268435456)`;
+ *  - WMShell linkage — `MultiTaskingLinkageTransition.startSidebarLaunchFreeform:627-657`
+ *    builds the options with `MiuiMultiWindowUtils.makeActivityOptions` and sends the app's
+ *    own launcher intent, again with no per-launch task flag.
+ *
+ * New-task-ness is OPT-IN in this ROM: the caption 新建小窗 button is the only path that wants
+ * a second window, so it says so explicitly (`ActivityOptions.setForceLaunchNewTask`,
+ * `MiuiCaptionClickListener.handleNewWindowClicked:290-292`), reuses a background task by id
+ * when one exists (:239-243) and refuses past two freeform windows (:58 `MAX_FREEFORM_COUNT`,
+ * `showMaxFreeformToastIfNeeded:448-470`); the plain 小窗 button merely converts the current
+ * window (:155-181).
+ *
+ * `FLAG_ACTIVITY_MULTIPLE_TASK` means "always start a NEW task, never bring an existing one
+ * to the front". With an app that is already running (fullscreen or in another small window)
+ * the ROM therefore starts a SECOND instance, and every further launch stacks another
+ * identical 小窗 — which is exactly the "小窗是个新实例 / 能开出好几个一模一样的小窗" report.
+ * MIUI's own ActivityStarter spells the policy out in `ActivityStarterImpl.resolveReusableTask`
+ * (pulled `miui-services.jar`): a freeform launch whose options report
+ * `getForceLaunchNewTask()` returns `(true, null)` = "do not reuse". Without the flag the
+ * existing task is reused and MIUI moves that task into the small window.
+ *
+ * `FLAG_ACTIVITY_RESET_TASK_IF_NEEDED` is dropped with it: that is launcher semantics
+ * ("restart the app at its root activity"), not 小窗 semantics — the sidebar resumes the app
+ * where the user left it.
  */
 class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrategy {
 
@@ -52,11 +82,11 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
         } else {
             context.packageManager.getLaunchIntentForPackage(app.packageName)
         })?.apply {
-            addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                    Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED,
-            )
+            // Task-identity parity with the ROM's own 小窗 launches (see class KDoc):
+            // NEW_TASK only. MULTIPLE_TASK used to force a brand-new task on every launch,
+            // so a running app got a second instance in a second small window instead of
+            // being moved into the one window the user asked for.
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         } ?: return false
 
         val opts = miuiOptions(context, app.packageName) ?: aospOptions(context)
@@ -105,6 +135,14 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
         val pos = if (snap.flymeFreeformEnabled) null else position
 
         return (MiuiFreeform.activityOptions(context, pkg, noCheck = true, position = pos)
+            // `getActivityOptions` is gated by checkAuthority() (third-party callers get
+            // null); the ROM's own builder is not, and is what its sidebar linkage uses.
+            ?: MiuiFreeform.makeActivityOptions(
+                context,
+                pkg,
+                pos?.left ?: MiuiFreeform.POS_AUTO,
+                pos?.top ?: MiuiFreeform.POS_AUTO,
+            )
             ?: ActivityOptions.makeBasic().also {
                 runCatching {
                     ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)

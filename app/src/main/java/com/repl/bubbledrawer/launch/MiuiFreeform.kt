@@ -181,6 +181,46 @@ object MiuiFreeform {
         return options
     }
 
+    /**
+     * `MiuiMultiWindowUtils.makeActivityOptions(context, pkg, left, top)` — the ROM's raw
+     * option builder, i.e. what [activityOptions] wraps after its gates.
+     *
+     * Worth a separate entry point because [activityOptions] (like every `getActivityOptions`
+     * overload) starts with `checkAuthority(context)`:
+     *
+     * ```java
+     * public static boolean checkAuthority(Context context) {
+     *     if (isThirdPartApp(context.getApplicationInfo())) {          // uid >= 10000 && !FLAG_SYSTEM
+     *         return MiuiMultiWindowAdapter.getAuthorisedFreeformList(false)
+     *                 .contains(context.getContentResolver().getPackageName());
+     *     }
+     *     return true;
+     * }
+     * ```
+     *
+     * So a launch made from a third-party context (our own manage Activity — the fan itself
+     * runs on SystemUI's identity and passes) gets `null` there and would silently degrade to
+     * a bare `setLaunchWindowingMode(5)` hint without MIUI's `miuiConfigFlag=2`,
+     * `freeformScale` and `normalFreeForm` extras. `makeActivityOptions` has no such gate —
+     * it is the very method the ROM's sidebar linkage calls
+     * (`MultiTaskingLinkageTransition.startSidebarLaunchFreeform:632`), which is why it is
+     * the better fallback.
+     */
+    fun makeActivityOptions(
+        context: Context,
+        pkg: String,
+        left: Int = POS_AUTO,
+        top: Int = POS_AUTO,
+    ): ActivityOptions? = runCatching {
+        Class.forName("android.util.MiuiMultiWindowUtils")
+            .getMethod(
+                "makeActivityOptions",
+                Context::class.java, String::class.java,
+                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+            )
+            .invoke(null, context, pkg, left, top) as? ActivityOptions
+    }.getOrNull()
+
     // ---------------- reflection plumbing ----------------
 
     private fun options4(
