@@ -59,11 +59,20 @@ class LetterIndexBar @JvmOverloads constructor(
         set(v) { field = v; bar.onLetterSelected = v }
 
     var letters: List<String> = DEFAULT_LETTERS
-        set(v) { field = v; bar.letters = v }
+        set(v) {
+            if (field != v) {
+                field = v
+                bar.letters = v
+            }
+        }
 
     var currentLetter: String?
         get() = bar.currentLetter
-        set(v) { bar.currentLetter = v }
+        set(v) {
+            if (bar.currentLetter != v) {
+                bar.currentLetter = v
+            }
+        }
 
     /** Vertical CENTERING of the letter column (panel host passes true). */
     var centerVertically: Boolean
@@ -161,9 +170,20 @@ class LetterIndexBar @JvmOverloads constructor(
         }
 
         var letters: List<String> = DEFAULT_LETTERS
-            set(v) { field = v; requestLayout(); invalidate() }
+            set(v) {
+                if (field != v) {
+                    field = v
+                    requestLayout()
+                    invalidate()
+                }
+            }
         var currentLetter: String? = null
-            set(v) { field = v; invalidate() }
+            set(v) {
+                if (field != v) {
+                    field = v
+                    invalidate()
+                }
+            }
         var onLetterSelected: ((String) -> Unit)? = null
 
         /** Vertical CENTERING (panel bar): draw the column around the view centre. */

@@ -22,9 +22,13 @@ import android.util.Log
 import android.util.LruCache
 import com.repl.bubbledrawer.pinyin.AppSortKey
 import com.repl.bubbledrawer.pinyin.BubbleApp
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -390,6 +394,15 @@ class AppRepository(private val context: Context) {
         cache = sorted
         val dualCount = sorted.count { it.userId == 999 }
         Log.i(TAG, "loadAll finished. Total apps=${sorted.size}, User 999 dual apps=$dualCount (${sorted.filter { it.userId == 999 }.map { it.packageName }})")
+
+        // Pre-warm top 50 icons in background to eliminate scroll hitching
+        CoroutineScope(Dispatchers.IO).launch {
+            val previewPx = (45 * context.resources.displayMetrics.density).toInt().coerceAtLeast(64)
+            for (app in sorted.take(50)) {
+                AppIconCache.loadOrGet(context, app, previewPx)
+            }
+        }
+
         sorted
     }
 
@@ -539,5 +552,45 @@ object LaunchCountStore {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val key = if (userId == 0) pkg else "$pkg#$userId"
         p.edit().putInt(KEY_PREFIX + key, get(context, pkg, userId) + 1).apply()
+    }
+}
+
+/** Global memory cache for ready-to-render Compose ImageBitmaps. */
+object AppIconCache {
+    private val memoryCache = LruCache<String, ImageBitmap>(300)
+
+    fun get(packageName: String, userId: Int, px: Int): ImageBitmap? {
+        val key = "$packageName#$userId@$px"
+        return memoryCache.get(key)
+    }
+
+    fun put(packageName: String, userId: Int, px: Int, bitmap: ImageBitmap) {
+        val key = "$packageName#$userId@$px"
+        memoryCache.put(key, bitmap)
+    }
+
+    suspend fun loadOrGet(
+        context: Context,
+        app: BubbleApp,
+        px: Int,
+    ): ImageBitmap? = withContext(Dispatchers.IO) {
+        get(app.packageName, app.userId, px)?.let { return@withContext it }
+
+        val drawable = AppRepository.getIcon(context, app)
+            ?: runCatching { context.packageManager.getApplicationIcon(app.packageName) }.getOrNull()
+            ?: return@withContext null
+
+        val imageBitmap = runCatching {
+            val bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+            drawable.setBounds(0, 0, px, px)
+            drawable.draw(canvas)
+            bmp.asImageBitmap()
+        }.getOrNull()
+
+        if (imageBitmap != null) {
+            put(app.packageName, app.userId, px, imageBitmap)
+        }
+        imageBitmap
     }
 }

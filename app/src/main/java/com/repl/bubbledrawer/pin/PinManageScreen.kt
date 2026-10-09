@@ -2,6 +2,7 @@ package com.repl.bubbledrawer.pin
 
 import android.content.res.Configuration
 import android.graphics.drawable.Drawable
+import com.repl.bubbledrawer.data.AppIconCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -134,10 +135,20 @@ fun PinManageScreen(
             itemsIndexed(
                 items = model.cells,
                 key = { _, cell -> cellKey(cell) },
+                contentType = { _, cell ->
+                    when (cell) {
+                        is Cell.PinHead -> 0
+                        is Cell.EmptyHint -> 1
+                        is Cell.Label -> 2
+                        is Cell.Pin -> 3
+                        is Cell.App -> 4
+                    }
+                },
                 span = { _, cell ->
                     if (cell is Cell.Pin || cell is Cell.App) GridItemSpan(1) else GridItemSpan(gridSpan)
                 },
             ) { index, cell ->
+                val cellModifier = if (model.manageMode) Modifier.animateItem() else Modifier
                 when (cell) {
                     is Cell.PinHead -> HeadRow(headText)
                     is Cell.EmptyHint -> EmptyHintRow(emptyText)
@@ -150,7 +161,7 @@ fun PinManageScreen(
                         iconDp = iconDp,
                         textSp = textSp,
                         onTap = { if (model.manageMode) model.togglePin(cell.app) else onLaunch(cell.app) },
-                        modifier = Modifier.animateItem(),
+                        modifier = cellModifier,
                     )
                     is Cell.App -> AppCell(
                         app = cell.app,
@@ -158,7 +169,7 @@ fun PinManageScreen(
                         iconDp = iconDp,
                         textSp = textSp,
                         onTap = { if (model.manageMode) model.togglePin(cell.app) else onLaunch(cell.app) },
-                        modifier = Modifier.animateItem(),
+                        modifier = cellModifier,
                     )
                 }
             }
@@ -440,15 +451,26 @@ private fun AppTile(
 private fun AppIcon(app: BubbleApp, size: androidx.compose.ui.unit.Dp) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val bitmap = remember(app.packageName, app.userId, size) {
-        val px = with(density) { size.roundToPx() }
-        val iconDrawable = AppRepository.getIcon(context, app)
-            ?: runCatching { context.packageManager.getApplicationIcon(app.packageName) }.getOrNull()
-        iconDrawable?.toBitmap(px)
+    val px = with(density) { size.roundToPx() }
+
+    // Instant memory-cache hit (0 latency, 0 main-thread I/O)
+    var imageBitmap by remember(app.packageName, app.userId, px) {
+        mutableStateOf(AppIconCache.get(app.packageName, app.userId, px))
     }
-    if (bitmap != null) {
+
+    if (imageBitmap == null) {
+        LaunchedEffect(app.packageName, app.userId, px) {
+            val loaded = AppIconCache.loadOrGet(context, app, px)
+            if (loaded != null) {
+                imageBitmap = loaded
+            }
+        }
+    }
+
+    val currentBmp = imageBitmap
+    if (currentBmp != null) {
         Image(
-            bitmap = bitmap,
+            bitmap = currentBmp,
             contentDescription = app.label,
             modifier = Modifier
                 .size(size)
@@ -462,14 +484,6 @@ private fun AppIcon(app: BubbleApp, size: androidx.compose.ui.unit.Dp) {
         )
     }
 }
-
-private fun Drawable.toBitmap(px: Int) = runCatching {
-    val bmp = android.graphics.Bitmap.createBitmap(px, px, android.graphics.Bitmap.Config.ARGB_8888)
-    val canvas = android.graphics.Canvas(bmp)
-    setBounds(0, 0, px, px)
-    draw(canvas)
-    bmp.asImageBitmap()
-}.getOrNull()
 
 /**
  * ★ drag coordinator. Cell centers land in a PLAIN map — gesture callbacks read it, no
@@ -589,7 +603,7 @@ private fun LetterBarOverlay(
 ) {
     if (letters.isEmpty()) return
     val density = LocalDensity.current
-    var currentLetter by remember { mutableStateOf<String?>(null) }
+    val barLetters = remember(letters) { letters.map { barGlyph(it) } }
 
     // Discrete derived state: recomposes only when the top section actually changes.
     val visibleLetter by remember(cells) {
@@ -603,7 +617,6 @@ private fun LetterBarOverlay(
             cur ?: PINNED_GLYPH
         }
     }
-    LaunchedEffect(visibleLetter) { currentLetter = visibleLetter }
 
     // Resolve theme colors in composition; the AndroidView update block is NOT a
     // composable context and must only receive plain values.
@@ -622,8 +635,8 @@ private fun LetterBarOverlay(
             val w = with(density) { 28.dp.roundToPx() }
             bar.minimumWidth = w
             // Bar wants single glyphs; translate section labels (推荐 → ♥) and CENTER it.
-            bar.letters = letters.map { barGlyph(it) }
-            bar.currentLetter = currentLetter?.let { barGlyph(it) }
+            bar.letters = barLetters
+            bar.currentLetter = barGlyph(visibleLetter)
             bar.centerVertically = true
             bar.allowSampledDisplay = true
             bar.refreshColors(
