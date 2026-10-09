@@ -92,6 +92,19 @@ object RemotePrefs {
     const val FAN_RADIUS_MIN = 180
     const val FAN_RADIUS_MAX = 360
 
+    /** 扇形应用未摆满时用推荐应用填满（默认关闭） */
+    const val KEY_FAN_AUTO_FILL_RECOMMEND = "fan_auto_fill_recommend"
+    const val DEFAULT_FAN_AUTO_FILL_RECOMMEND = false
+
+    /** 更多面板推荐应用开关与显示数量（4个为一组，最多20个） */
+    const val KEY_RECOMMEND_ENABLED = "recommend_enabled"
+    const val KEY_RECOMMEND_COUNT = "recommend_count"
+    const val DEFAULT_RECOMMEND_ENABLED = true
+    const val DEFAULT_RECOMMEND_COUNT = 8
+    const val RECOMMEND_COUNT_MIN = 4
+    const val RECOMMEND_COUNT_MAX = 20
+    const val RECOMMEND_COUNT_STEP = 4
+
     @androidx.compose.runtime.Immutable
     data class Snapshot(
         val enabled: Boolean,
@@ -113,6 +126,11 @@ object RemotePrefs {
         val fanIconCount: Int = DEFAULT_FAN_ICON_COUNT,
         /** 展开扇形半径（dp） */
         val fanRadiusDp: Int = DEFAULT_FAN_RADIUS_DP,
+        /** 扇形未摆满时用推荐应用填满 */
+        val fanAutoFillRecommend: Boolean = DEFAULT_FAN_AUTO_FILL_RECOMMEND,
+        /** 推荐应用开关与显示数量（4, 8, 12, 16, 20） */
+        val recommendEnabled: Boolean = DEFAULT_RECOMMEND_ENABLED,
+        val recommendCount: Int = DEFAULT_RECOMMEND_COUNT,
     )
 
     fun enabledFor(side: com.repl.bubbledrawer.gesture.SpySide): (Snapshot) -> Boolean = { snap ->
@@ -128,6 +146,9 @@ object RemotePrefs {
             return Snapshot(false, false, false, DEFAULT_RANGE_DP, DEFAULT_RANGE_DP, DEFAULT_RANGE_DP, false, "")
         }
         val range = sp.getInt(KEY_RANGE_DP, DEFAULT_RANGE_DP).coerceIn(MIN_DP, MAX_DP)
+        val rawRecCount = sp.getInt(KEY_RECOMMEND_COUNT, DEFAULT_RECOMMEND_COUNT).coerceIn(RECOMMEND_COUNT_MIN, RECOMMEND_COUNT_MAX)
+        val snappedRecCount = (((rawRecCount - RECOMMEND_COUNT_MIN + (RECOMMEND_COUNT_STEP / 2)) / RECOMMEND_COUNT_STEP) * RECOMMEND_COUNT_STEP + RECOMMEND_COUNT_MIN)
+            .coerceIn(RECOMMEND_COUNT_MIN, RECOMMEND_COUNT_MAX)
         return Snapshot(
             enabled = sp.getBoolean(KEY_ENABLED, DEFAULT_ENABLED),
             left = sp.getBoolean(KEY_LEFT, DEFAULT_LEFT),
@@ -145,6 +166,9 @@ object RemotePrefs {
             panelDismissOutside = sp.getInt(KEY_PANEL_DISMISS_OUTSIDE, DEFAULT_PANEL_DISMISS_OUTSIDE).coerceIn(0, 1),
             fanIconCount = sp.getInt(KEY_FAN_ICON_COUNT, DEFAULT_FAN_ICON_COUNT).coerceIn(5, 6),
             fanRadiusDp = sp.getInt(KEY_FAN_RADIUS_DP, DEFAULT_FAN_RADIUS_DP).let { if (it <= 0) DEFAULT_FAN_RADIUS_DP else it.coerceIn(FAN_RADIUS_MIN, FAN_RADIUS_MAX) },
+            fanAutoFillRecommend = sp.getBoolean(KEY_FAN_AUTO_FILL_RECOMMEND, DEFAULT_FAN_AUTO_FILL_RECOMMEND),
+            recommendEnabled = sp.getBoolean(KEY_RECOMMEND_ENABLED, DEFAULT_RECOMMEND_ENABLED),
+            recommendCount = snappedRecCount,
             pins = sp.getString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, "").orEmpty(),
         )
     }

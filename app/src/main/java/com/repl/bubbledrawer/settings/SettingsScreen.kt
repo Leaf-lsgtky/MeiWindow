@@ -316,7 +316,14 @@ fun FanSettingsScreen(
                             onCommit = actions::setFanRadiusDp,
                         )
                     })
-                    add(CardItem("hint") { SliderHintRow(stringResource(R.string.fan_hint)) })
+                    add(CardItem("auto_fill") {
+                        SwitchRow(
+                            title = stringResource(R.string.fan_auto_fill_recommend),
+                            checked = snap.fanAutoFillRecommend,
+                            onCheckedChange = actions::setFanAutoFillRecommend,
+                        )
+                    })
+                    add(CardItem("hint") { SliderHintRow(stringResource(R.string.fan_auto_fill_recommend_summary)) })
                 },
             )
 
@@ -427,6 +434,33 @@ fun MorePanelSettingsScreen(
                         )
                     })
                     add(CardItem("hint") { SliderHintRow(stringResource(R.string.more_panel_hint)) })
+                },
+            )
+
+            groupedCardItems(
+                keyPrefix = "recommend",
+                items = buildList {
+                    add(CardItem("enable") {
+                        SwitchRow(
+                            title = stringResource(R.string.recommend_apps_enable),
+                            checked = snap.recommendEnabled,
+                            onCheckedChange = actions::setRecommendEnabled,
+                        )
+                    })
+                    if (snap.recommendEnabled) {
+                        add(CardItem("count") {
+                            StepIntSliderRow(
+                                title = stringResource(R.string.recommend_apps_count),
+                                value = snap.recommendCount,
+                                min = RemotePrefs.RECOMMEND_COUNT_MIN,
+                                max = RemotePrefs.RECOMMEND_COUNT_MAX,
+                                step = RemotePrefs.RECOMMEND_COUNT_STEP,
+                                valueText = { stringResource(R.string.recommend_apps_count_format, it) },
+                                onCommit = actions::setRecommendCount,
+                            )
+                        })
+                    }
+                    add(CardItem("hint") { SliderHintRow(stringResource(R.string.recommend_apps_hint)) })
                 },
             )
 

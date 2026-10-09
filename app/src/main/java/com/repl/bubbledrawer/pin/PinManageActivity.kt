@@ -50,6 +50,15 @@ class PinManageActivity : ComponentActivity() {
             loadApps = { repo.cachedAll().ifEmpty { repo.loadAll() } },
             pinsOf = { pinStore.pins() },
             onOrderChange = { order -> pinStore.setPins(order) },
+            recommendConfig = {
+                val snap = SettingsStore.snapshot(this@PinManageActivity)
+                snap.recommendEnabled to snap.recommendCount
+            },
+            loadRecommendations = { all, pinned, count ->
+                com.repl.bubbledrawer.data.predict.AppPredictor.getRecommendations(
+                    this@PinManageActivity, all, pinned, count,
+                )
+            },
         )
         model.reload()
         setContent {
@@ -67,8 +76,8 @@ class PinManageActivity : ComponentActivity() {
                                 navigationIcon = {
                                     IconButton(onClick = { finish() }) {
                                         Icon(
-                                            imageVector = MiuixIcons.Back,
-                                            contentDescription = getString(R.string.back),
+                                             imageVector = MiuixIcons.Back,
+                                             contentDescription = getString(R.string.back),
                                         )
                                     }
                                 },
@@ -97,6 +106,7 @@ class PinManageActivity : ComponentActivity() {
                             // carries start_windowmode=true)
                             ConfigurableLaunchStrategy(this@PinManageActivity).launch(this@PinManageActivity, app)
                             LaunchCountStore.increment(this@PinManageActivity, app.packageName, app.userId)
+                            com.repl.bubbledrawer.data.predict.AppPredictor.recordLaunch(this@PinManageActivity, app.packageName, app.userId)
                         },
                         onClose = null,
                         onToggleManage = model::toggleManageMode,

@@ -30,6 +30,8 @@ class PinManageModel(
     private val pinsOf: () -> List<PinnedRef>,
     /** Persisted on drag end / unpin. */
     private val onOrderChange: (List<PinnedRef>) -> Unit,
+    private val recommendConfig: () -> Pair<Boolean, Int> = { true to 8 },
+    private val loadRecommendations: (suspend (List<BubbleApp>, Set<String>, Int) -> List<BubbleApp>)? = null,
 ) {
     /** false = view mode (tap launches); true = edit mode (tap pins, long-press drags). */
     var manageMode: Boolean by mutableStateOf(false)
@@ -98,8 +100,32 @@ class PinManageModel(
         "texts=[$tabText,$headText] items=${cells.size} letters=${letters.size} manage=$manageMode"
 
     private fun rebuild() {
-        cells = Sections.build(apps, pinsOf(), recommend = true)
-        letters = (listOf("★") + Sections.labelsOf(cells)).distinct()
+        val (enabled, count) = recommendConfig()
+        val currentPins = pinsOf()
+        val pinnedKeys = currentPins.map { "${it.packageName}#${it.userId}" }.toSet()
+        if (enabled && loadRecommendations != null && apps.isNotEmpty()) {
+            scope.launch {
+                val recs = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    runCatching { loadRecommendations.invoke(apps, pinnedKeys, count) }.getOrDefault(emptyList())
+                }
+                cells = Sections.build(
+                    all = apps,
+                    pins = currentPins,
+                    recommend = enabled,
+                    recommendCount = count,
+                    recommendedApps = recs,
+                )
+                letters = (listOf("★") + Sections.labelsOf(cells)).distinct()
+            }
+        } else {
+            cells = Sections.build(
+                all = apps,
+                pins = currentPins,
+                recommend = enabled,
+                recommendCount = count,
+            )
+            letters = (listOf("★") + Sections.labelsOf(cells)).distinct()
+        }
     }
 
     /** Detach from the (foreign, long-lived) host process. */

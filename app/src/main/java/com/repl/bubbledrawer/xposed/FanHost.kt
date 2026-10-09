@@ -184,7 +184,7 @@ class FanHost(
             mainHandler.post {
                 if (dock.isBusy) {
                     val snap = RemotePrefs.read(prefs)
-                    dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp)
+                    dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend)
                 }
             }
         }
@@ -197,10 +197,10 @@ class FanHost(
                     pinsOverlay = remoteVal
                 }
                 val snap = RemotePrefs.read(prefs)
-                mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp) }
-            } else if (key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP) {
+                mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend) }
+            } else if (key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP || key == RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND) {
                 val snap = RemotePrefs.read(prefs)
-                mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp) }
+                mainHandler.post { if (dock.isBusy) dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend) }
             }
         }
         runCatching { prefs.registerOnSharedPreferenceChangeListener(pinsListener) }
@@ -215,7 +215,7 @@ class FanHost(
                     val snap = RemotePrefs.read(prefs)
                     mainHandler.post {
                         if (dock.isBusy) {
-                            dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp)
+                            dock.show(currentCorner(), screenW(), screenH(), snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend)
                         }
                     }
                     logger(Log.INFO, "PIN_SYNC_FROM_APP_APPLIED len=${raw.length}", null)
@@ -266,7 +266,7 @@ class FanHost(
         raiseFanWindows()
         dock.previewMode = false
         val snap = RemotePrefs.read(prefs)
-        dock.show(activeCorner, screenW, screenH, snap.fanIconCount, snap.fanRadiusDp)
+        dock.show(activeCorner, screenW, screenH, snap.fanIconCount, snap.fanRadiusDp, snap.fanAutoFillRecommend)
         val t = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, downX, downY, 0)
         dock.forward(down, 0)
@@ -467,6 +467,15 @@ class FanHost(
             loadApps = { repo.cachedAll().ifEmpty { repo.loadAll() } },
             pinsOf = { pinStore.pins() },
             onOrderChange = { order -> pinStore.setPins(order) },
+            recommendConfig = {
+                val snap = RemotePrefs.read(prefs)
+                snap.recommendEnabled to snap.recommendCount
+            },
+            loadRecommendations = { all, pinned, count ->
+                com.repl.bubbledrawer.data.predict.AppPredictor.getRecommendations(
+                    context, all, pinned, count,
+                )
+            },
         )
         // Panel window root FIRST, then the Compose content inside it: the view-tree
         // owners must be tagged on the window root too (see PanelContentFactory.create
@@ -565,6 +574,7 @@ class FanHost(
             if (snap.freeform) FreeformLaunchStrategy(rect) else FullscreenLaunchStrategy()
         val ok = runCatching { strategy.launch(context, app) }.getOrDefault(false)
         LaunchCountStore.increment(context, app.packageName, app.userId)
+        com.repl.bubbledrawer.data.predict.AppPredictor.recordLaunch(context, app.packageName, app.userId)
         panelLog(
             "MORE_LAUNCH " + app.packageName + "#" + app.userId + " freeform=" + snap.freeform +
                 " rect=" + (rect?.toShortString() ?: "-") + " ok=" + ok,

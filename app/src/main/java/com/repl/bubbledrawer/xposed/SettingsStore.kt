@@ -106,6 +106,25 @@ object SettingsStore {
     /** 展开扇形半径（dp）。 */
     fun setFanRadiusDp(context: Context, dp: Int) = putInt(context, RemotePrefs.KEY_FAN_RADIUS_DP, dp.coerceIn(RemotePrefs.FAN_RADIUS_MIN, RemotePrefs.FAN_RADIUS_MAX))
 
+    /** 扇形未摆满时用推荐应用填满开关。 */
+    fun setFanAutoFillRecommend(context: Context, enabled: Boolean) {
+        RemoteBridge.local(context).edit().putBoolean(RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND, enabled).apply()
+        RemoteBridge.remote?.edit()?.putBoolean(RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND, enabled)?.apply()
+    }
+
+    /** 更多面板推荐应用开关与数量（4, 8, 12, 16, 20）。 */
+    fun setRecommendEnabled(context: Context, enabled: Boolean) {
+        RemoteBridge.local(context).edit().putBoolean(RemotePrefs.KEY_RECOMMEND_ENABLED, enabled).apply()
+        RemoteBridge.remote?.edit()?.putBoolean(RemotePrefs.KEY_RECOMMEND_ENABLED, enabled)?.apply()
+    }
+
+    fun setRecommendCount(context: Context, count: Int) {
+        val raw = count.coerceIn(RemotePrefs.RECOMMEND_COUNT_MIN, RemotePrefs.RECOMMEND_COUNT_MAX)
+        val snapped = (((raw - RemotePrefs.RECOMMEND_COUNT_MIN + (RemotePrefs.RECOMMEND_COUNT_STEP / 2)) / RemotePrefs.RECOMMEND_COUNT_STEP) * RemotePrefs.RECOMMEND_COUNT_STEP + RemotePrefs.RECOMMEND_COUNT_MIN)
+            .coerceIn(RemotePrefs.RECOMMEND_COUNT_MIN, RemotePrefs.RECOMMEND_COUNT_MAX)
+        putInt(context, RemotePrefs.KEY_RECOMMEND_COUNT, snapped)
+    }
+
     private fun putInt(context: Context, key: String, value: Int) {
         RemoteBridge.local(context).edit().putInt(key, value).apply()
         RemoteBridge.remote?.edit()?.putInt(key, value)?.apply()

@@ -23,6 +23,9 @@ interface SettingsActions {
     fun setPanelDismissOutside(mode: Int)
     fun setFanIconCount(count: Int)
     fun setFanRadiusDp(dp: Int)
+    fun setFanAutoFillRecommend(enabled: Boolean)
+    fun setRecommendEnabled(enabled: Boolean)
+    fun setRecommendCount(count: Int)
     fun openManage(context: Context)
 }
 
@@ -41,6 +44,9 @@ class StoreSettingsActions(private val context: Context) : SettingsActions {
     override fun setPanelDismissOutside(mode: Int) = SettingsStore.setPanelDismissOutside(context, mode)
     override fun setFanIconCount(count: Int) = SettingsStore.setFanIconCount(context, count)
     override fun setFanRadiusDp(dp: Int) = SettingsStore.setFanRadiusDp(context, dp)
+    override fun setFanAutoFillRecommend(enabled: Boolean) = SettingsStore.setFanAutoFillRecommend(context, enabled)
+    override fun setRecommendEnabled(enabled: Boolean) = SettingsStore.setRecommendEnabled(context, enabled)
+    override fun setRecommendCount(count: Int) = SettingsStore.setRecommendCount(context, count)
     override fun openManage(context: Context) {
         context.startActivity(
             android.content.Intent(context, com.repl.bubbledrawer.pin.PinManageActivity::class.java),

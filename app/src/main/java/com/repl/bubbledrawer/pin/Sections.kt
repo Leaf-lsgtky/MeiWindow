@@ -41,6 +41,8 @@ object Sections {
         all: List<BubbleApp>,
         pins: List<PinnedRef>,
         recommend: Boolean,
+        recommendCount: Int = RECOMMEND_TOP_N,
+        recommendedApps: List<BubbleApp> = emptyList(),
     ): ImmutableList<Cell> {
         val pinnedKeys = pins.map { "${it.packageName}#${it.userId}" }.toSet()
         val out = ArrayList<Cell>()
@@ -58,10 +60,14 @@ object Sections {
             }
         }
 
-        if (recommend) {
-            val rec = all.filter { it.usageCount > 0 && "${it.packageName}#${it.userId}" !in pinnedKeys }
-                .sortedByDescending { it.usageCount }
-                .take(RECOMMEND_TOP_N)
+        if (recommend && recommendCount > 0) {
+            val rec = if (recommendedApps.isNotEmpty()) {
+                recommendedApps.filter { "${it.packageName}#${it.userId}" !in pinnedKeys }.take(recommendCount)
+            } else {
+                all.filter { it.usageCount > 0 && "${it.packageName}#${it.userId}" !in pinnedKeys }
+                    .sortedByDescending { it.usageCount }
+                    .take(recommendCount)
+            }
             if (rec.isNotEmpty()) {
                 out.add(Cell.Label("推荐"))
                 rec.forEach { out.addApp(it, "推荐") }

@@ -129,6 +129,36 @@ fun IntSliderRow(
 }
 
 /**
+ * Stepped integer slider snapping to increments of [step] (e.g. 4, 8, 12, 16, 20).
+ */
+@Composable
+fun StepIntSliderRow(
+    title: String,
+    value: Int,
+    min: Int,
+    max: Int,
+    step: Int,
+    valueText: @Composable (Int) -> String,
+    onCommit: (Int) -> Unit,
+) {
+    var dragging by remember(value) { mutableStateOf(value.toFloat()) }
+    val stepCount = ((max - min) / step).coerceAtLeast(1)
+    val snappedCurrent = (Math.round((dragging - min) / step.toFloat()) * step + min).coerceIn(min, max)
+    SliderPreference(
+        title = title,
+        value = dragging,
+        onValueChange = { dragging = it },
+        valueText = valueText(snappedCurrent),
+        valueRange = min.toFloat()..max.toFloat(),
+        steps = stepCount - 1,
+        onValueChangeFinished = {
+            val snapped = (Math.round((dragging - min) / step.toFloat()) * step + min).coerceIn(min, max)
+            onCommit(snapped)
+        },
+    )
+}
+
+/**
  * Slider that displays [defaultText] ("默认") when its value equals [defaultValue].
  * As the user slides (e.g. at 80), it shows: 79% -> 默认 -> 81%!
  */

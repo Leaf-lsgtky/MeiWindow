@@ -61,6 +61,7 @@ class BubbleDockController(
                     is GestureAppLauncher.AdapterItem.AppItem -> {
                         launchStrategy.launch(context, item.app)
                         LaunchCountStore.increment(context, item.app.packageName, item.app.userId)
+                        com.repl.bubbledrawer.data.predict.AppPredictor.recordLaunch(context, item.app.packageName, item.app.userId)
                     }
                     GestureAppLauncher.AdapterItem.More -> {
                         // VERIFIED: original fan's trailing "更多" tile (C2821f.mo3456G
@@ -110,10 +111,10 @@ class BubbleDockController(
     }
 
     /** @param screenH full-screen height in px (the launcher window is MATCH_PARENT). */
-    fun show(corner: Corner, screenW: Int, screenH: Int, maxApps: Int = 6, radiusDp: Int = 0) {
+    fun show(corner: Corner, screenW: Int, screenH: Int, maxApps: Int = 6, radiusDp: Int = 0, autoFillRecommend: Boolean = false) {
         val side = if (corner == Corner.BOTTOM_RIGHT || corner == Corner.SIDE_RIGHT) 1 else 0
         launcher.setAdapter(
-            GestureAppLauncher.SlideAdapter(buildItems(maxApps)) { item, index ->
+            GestureAppLauncher.SlideAdapter(buildItems(maxApps, autoFillRecommend)) { item, index ->
                 viewFactory?.create(item, index) ?: itemView(item)
             },
         )
@@ -144,18 +145,32 @@ class BubbleDockController(
         return id > 0 && context.resources.getDimensionPixelSize(id) > 0
     }
 
-    /** m9235C (:447-463): first maxApps pins (5 or 6), then the "更多" tile. */
-    private fun buildItems(maxApps: Int): List<GestureAppLauncher.AdapterItem> {
+    /** m9235C (:447-463): first maxApps pins (5 or 6), then the "更多" tile. If [autoFillRecommend] is true, fills remainder with recommendations. */
+    private fun buildItems(maxApps: Int, autoFillRecommend: Boolean): List<GestureAppLauncher.AdapterItem> {
         val all = repo.cachedAll()
         val out = ArrayList<GestureAppLauncher.AdapterItem>()
+        val pinnedKeys = HashSet<String>()
         for (ref in pinStore.pins()) {
             if (out.size >= maxApps) break // user selected 5 or 6
             val app = all.firstOrNull { it.packageName == ref.packageName && it.userId == ref.userId }
                 ?: repo.findApp(ref.packageName, ref.userId)
             if (app != null) {
                 out.add(GestureAppLauncher.AdapterItem.AppItem(app))
+                pinnedKeys.add("${app.packageName}#${app.userId}")
             }
         }
+
+        if (autoFillRecommend && out.size < maxApps) {
+            val needed = maxApps - out.size
+            val recommendations = com.repl.bubbledrawer.data.predict.AppPredictor.getRecommendations(
+                context, all, pinnedKeys, needed,
+            )
+            for (rec in recommendations) {
+                out.add(GestureAppLauncher.AdapterItem.AppItem(rec))
+                if (out.size >= maxApps) break
+            }
+        }
+
         out.add(GestureAppLauncher.AdapterItem.More) // :460-461 more tile (icon_gesture_more_app)
         return out
     }

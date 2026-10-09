@@ -151,7 +151,10 @@ object RemoteBridge {
             .putInt(RemotePrefs.KEY_PANEL_TEXT_SP, snap.panelTextSp)
             .putInt(RemotePrefs.KEY_FAN_ICON_COUNT, snap.fanIconCount)
             .putInt(RemotePrefs.KEY_FAN_RADIUS_DP, snap.fanRadiusDp)
+            .putBoolean(RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND, snap.fanAutoFillRecommend)
             .putInt(RemotePrefs.KEY_PANEL_DISMISS_OUTSIDE, snap.panelDismissOutside)
+            .putBoolean(RemotePrefs.KEY_RECOMMEND_ENABLED, snap.recommendEnabled)
+            .putInt(RemotePrefs.KEY_RECOMMEND_COUNT, snap.recommendCount)
         if (localPins != null) {
             editor.putString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, localPins)
         }

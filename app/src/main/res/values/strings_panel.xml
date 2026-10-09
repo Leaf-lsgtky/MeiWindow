@@ -9,4 +9,9 @@
     <string name="panel_dismiss_outside">点击外部收起</string>
     <string name="panel_dismiss_outside_single">单击</string>
     <string name="panel_dismiss_outside_double">双击</string>
+    <string name="recommend_section_title">推荐应用</string>
+    <string name="recommend_apps_enable">启用推荐应用</string>
+    <string name="recommend_apps_count">推荐显示数量</string>
+    <string name="recommend_apps_count_format">%1$d 个</string>
+    <string name="recommend_apps_hint">复刻小米安全服务预测算法：结合5维朴素贝叶斯、2阶马尔可夫转移概率及RRF倒数排名融合，按使用习惯自适应推荐。</string>
 </resources>
