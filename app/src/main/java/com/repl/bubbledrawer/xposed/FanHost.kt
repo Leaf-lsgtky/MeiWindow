@@ -1,5 +1,6 @@
 package com.repl.bubbledrawer.xposed
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -7,6 +8,7 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.os.PowerManager
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -279,6 +281,10 @@ class FanHost(
      *  the corner — the spy was only observing until pilfer), then arm the timeout. */
     fun show(side: SpySide, downX: Float, downY: Float, screenW: Int, screenH: Int) {
         if (moduleContext == null) return // no module resources → no fan (fail closed)
+        val km = host.getSystemService(KeyguardManager::class.java)
+        if (km?.isKeyguardLocked == true) return
+        val pm = host.getSystemService(PowerManager::class.java)
+        if (pm?.isInteractive == false) return
         hideMorePanel(animated = false) // a fresh stroke always starts from the fan
         activeCorner = if (side == SpySide.LEFT) Corner.BOTTOM_LEFT else Corner.BOTTOM_RIGHT
         raiseFanWindows()
@@ -496,6 +502,10 @@ class FanHost(
      */
     private fun showMorePanel() {
         if (moreUp || moduleContext == null) return
+        val km = host.getSystemService(KeyguardManager::class.java)
+        if (km?.isKeyguardLocked == true) return
+        val pm = host.getSystemService(PowerManager::class.java)
+        if (pm?.isInteractive == false) return
         // Placement is screen-centred and independent of whatever小窗 is open; the only
         // inputs are the two size sliders (see applyPanelSize).
         val panelSnap = RemotePrefs.read(prefs)
@@ -559,7 +569,21 @@ class FanHost(
         // owners must be tagged on the window root too (see PanelContentFactory.create
         // doc) because compose resolves the lifecycle owner at the compose-view ROOT,
         // not on the ComposeView itself.
-        val panel = FrameLayout(context).apply {
+        val panel = object : FrameLayout(context) {
+            override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+                if (event.keyCode == android.view.KeyEvent.KEYCODE_BACK && event.action == android.view.KeyEvent.ACTION_UP) {
+                    if (content.isSearching) {
+                        content.cancelSearch()
+                    } else {
+                        hideMorePanel()
+                    }
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
+            }
+        }.apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
             background = GradientDrawable().apply {
                 // MiuiMultiWindowUtils.FREEFORM_ROUND_CORNER = 25.8dp — match the ROM window
                 cornerRadius = 26f * resources.displayMetrics.density
@@ -576,6 +600,15 @@ class FanHost(
             textSp = panelSnap.panelTextSp,
             onLaunch = { app -> launchFromPanel(app) },
             onClose = { hideMorePanel() },
+            onFocusChange = { focusable ->
+                val lp = panel.layoutParams as? WindowManager.LayoutParams ?: return@create
+                if (focusable) {
+                    lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+                } else {
+                    lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                }
+                runCatching { wm.updateViewLayout(panel, lp) }
+            },
         )
         panel.addView(
             composeView,
@@ -626,6 +659,7 @@ class FanHost(
     private fun hideMorePanel(animated: Boolean = true) {
         if (!moreUp) return
         moreUp = false
+        moreContent?.cancelSearch()
         moreContent?.release()
         moreContent = null
         moreCatcher?.let { runCatching { wm.removeViewImmediate(it) } }
@@ -711,6 +745,7 @@ class FanHost(
         baseParams(rect.width(), rect.height(), title, touchable = true).apply {
             x = rect.left
             y = rect.top
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
     private fun baseParams(width: Int, height: Int, title: String, touchable: Boolean) =

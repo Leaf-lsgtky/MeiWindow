@@ -1,6 +1,7 @@
 package com.repl.bubbledrawer.xposed
 
 import android.annotation.SuppressLint
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.PixelFormat
@@ -10,6 +11,7 @@ import android.hardware.input.InputManagerGlobal
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
@@ -101,9 +103,19 @@ class CornerInputMonitor(
 ) {
     private val wm = context.getSystemService(WindowManager::class.java)!!
     private val inputManager = context.getSystemService(InputManager::class.java)!!
+    private val keyguardManager = context.getSystemService(KeyguardManager::class.java)
+    private val powerManager = context.getSystemService(PowerManager::class.java)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val density = context.resources.displayMetrics.density
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+
+    /** Returns true only if the display is interactive and the keyguard is NOT locked. */
+    private fun isUnlockedAndInteractive(): Boolean {
+        val interactive = runCatching { powerManager?.isInteractive != false }.getOrDefault(true)
+        if (!interactive) return false
+        val locked = runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)
+        return !locked
+    }
 
     /** a stroke that moved no further than this counts as a tap at release */
     private val tapSlopPx = touchSlop * 1.5f
@@ -426,7 +438,7 @@ class CornerInputMonitor(
 
             MotionEvent.ACTION_MOVE -> {
                 val s = stroke ?: return false
-                if (!settings.enabled) {
+                if (!settings.enabled || !isUnlockedAndInteractive()) {
                     s.cancel()
                     return false
                 }
@@ -500,7 +512,7 @@ class CornerInputMonitor(
     private fun beginMonitorStroke(ev: MotionEvent) {
         if (ev.pointerCount != 1) return
         if (ev.getToolType(0) != MotionEvent.TOOL_TYPE_FINGER) return
-        if (!settings.enabled) return
+        if (!settings.enabled || !isUnlockedAndInteractive()) return
         val x = ev.rawX
         val y = ev.rawY
         val side = sideFor(x, y)
@@ -710,7 +722,7 @@ class CornerInputMonitor(
             side = side,
             rangePx = size.toFloat(),
             touchSlopPx = touchSlop,
-            canClaim = { settings.enabled && if (side == SpySide.LEFT) settings.left else settings.right },
+            canClaim = { settings.enabled && isUnlockedAndInteractive() && if (side == SpySide.LEFT) settings.left else settings.right },
             pilfer = ::pilferView,
             onActivate = { activated, screenX, screenY -> openFan(activated, screenX, screenY) },
             onStream = { screenEv -> forwardToFan(screenEv) },
@@ -817,6 +829,10 @@ class CornerInputMonitor(
             // activation distance).
             when (val action = engine.move(pointerId, raw.pointerCount, x, y, cfg)) {
                 is SpyAction.Activate -> {
+                    if (!isUnlockedAndInteractive()) {
+                        cancel()
+                        return
+                    }
                     if (!pilferAttempted && !owned) {
                         pilferAttempted = true
                         val ok = pilferMonitor()
@@ -935,7 +951,11 @@ class CornerInputMonitor(
     }
 
     private fun openFan(side: SpySide, x: Float, y: Float) {
-        mainHandler.post { ensureFan().show(side, x, y, screenW(), screenH()) }
+        if (!isUnlockedAndInteractive()) return
+        mainHandler.post {
+            if (!isUnlockedAndInteractive()) return@post
+            ensureFan().show(side, x, y, screenW(), screenH())
+        }
     }
 
     private fun retractFan() {

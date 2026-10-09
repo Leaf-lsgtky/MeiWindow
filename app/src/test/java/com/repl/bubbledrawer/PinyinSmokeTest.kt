@@ -78,4 +78,10 @@ class PinyinSmokeTest {
         val list = listOf("M", "#", "A").sortedWith(AppSortKey.SECTION_LETTER)
         assertEquals(listOf("A", "M", "#"), list)
     }
+
+    @Test
+    fun initials() {
+        assertEquals("WX", AppSortKey.initialsOf("微信"))
+        assertEquals("ZFB", AppSortKey.initialsOf("支付宝"))
+    }
 }

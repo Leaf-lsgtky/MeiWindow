@@ -67,4 +67,8 @@
     <string name="category_manage_summary">排序与增删快捷启动应用</string>
     <string name="fan_hint">从屏幕左右下角向内滑出手势，即可展开环形扇形面板；手指移至图标上方松手即可快捷启动。若启用了小窗模式，应用将以悬浮小窗打开。</string>
     <string name="more_panel_hint">点击扇形面板上的“更多”图标即可打开更多应用面板，支持在全量应用列表中快速查找与启动。</string>
+    <string name="search">搜索</string>
+    <string name="search_hint">搜索应用</string>
+    <string name="search_no_result">无搜索结果</string>
+    <string name="search_cancel">取消搜索</string>
 </resources>

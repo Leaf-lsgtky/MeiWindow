@@ -142,6 +142,7 @@ object PanelContentFactory {
         textSp: Int,
         onLaunch: (com.repl.bubbledrawer.pinyin.BubbleApp) -> Unit,
         onClose: () -> Unit,
+        onFocusChange: ((Boolean) -> Unit)? = null,
     ): ComposeView {
         val owners = OverlayComposeOwners()
         // Resume BEFORE the first composition: the recomposer reads the lifecycle state on
@@ -164,6 +165,9 @@ object PanelContentFactory {
                 ) {
                     DisposableEffect(Unit) {
                         onDispose { owners.destroy() }
+                    }
+                    androidx.compose.runtime.LaunchedEffect(model.isSearching) {
+                        onFocusChange?.invoke(model.isSearching)
                     }
                     val backdrop = rememberBlurBackdrop()
                     PinManageScreen(

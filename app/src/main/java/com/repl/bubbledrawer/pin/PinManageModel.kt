@@ -47,6 +47,67 @@ class PinManageModel(
     var letters: List<String> by mutableStateOf(emptyList())
         private set
 
+    /** Search state. */
+    var isSearching: Boolean by mutableStateOf(false)
+    var searchQuery: String by mutableStateOf("")
+
+    fun startSearch() {
+        isSearching = true
+        searchQuery = ""
+    }
+
+    fun cancelSearch() {
+        isSearching = false
+        searchQuery = ""
+    }
+
+    fun isPinned(app: BubbleApp): Boolean =
+        pinsOf().any { it.packageName == app.packageName && it.userId == app.userId }
+
+    val displayedCells: List<Cell>
+        get() {
+            if (!isSearching || searchQuery.isBlank()) {
+                return cells
+            }
+            val q = searchQuery.trim()
+            val matched = apps.mapNotNull { app ->
+                val rank = searchRank(app, q)
+                if (rank > 0) app to rank else null
+            }.sortedWith { (a, rankA), (b, rankB) ->
+                if (rankA != rankB) rankA.compareTo(rankB)
+                else {
+                    val lenCmp = a.label.length.compareTo(b.label.length)
+                    if (lenCmp != 0) lenCmp
+                    else if (b.usageCount != a.usageCount) b.usageCount.compareTo(a.usageCount)
+                    else a.sortKey.compareTo(b.sortKey)
+                }
+            }.map { it.first }
+
+            if (matched.isEmpty()) {
+                return listOf(Cell.Label("无搜索结果"))
+            }
+            return listOf(Cell.Label("搜索结果")) + matched.map { Cell.App(it, "搜索结果") }
+        }
+
+    /**
+     * 搜索排序优先级：
+     * 1: 首字匹配 (app.label.startsWith)
+     * 2: 拼音首字匹配 (app.sortKey.startsWith 或 app.initials.startsWith)
+     * 3: 字符包含 (app.label / sortKey / initials 包含)
+     * 4: 包名包含 (app.packageName 包含)
+     * 0: 不匹配
+     */
+    fun searchRank(app: BubbleApp, query: String): Int {
+        if (app.label.startsWith(query, ignoreCase = true)) return 1
+        if (app.sortKey.startsWith(query, ignoreCase = true) ||
+            app.initials.startsWith(query, ignoreCase = true)) return 2
+        if (app.label.contains(query, ignoreCase = true) ||
+            app.sortKey.contains(query, ignoreCase = true) ||
+            app.initials.contains(query, ignoreCase = true)) return 3
+        if (app.packageName.contains(query, ignoreCase = true)) return 4
+        return 0
+    }
+
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     @MainThread

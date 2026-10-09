@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import android.graphics.drawable.Drawable
 import com.repl.bubbledrawer.data.AppIconCache
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -57,15 +58,24 @@ import com.repl.bubbledrawer.data.AppRepository
 import com.repl.bubbledrawer.pinyin.BubbleApp
 import com.repl.bubbledrawer.ui.theme.StatusColors
 import com.repl.bubbledrawer.ui.util.BlurredBar
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.ui.unit.DpSize
 import com.repl.bubbledrawer.ui.util.PageBottomSpacer
 import com.repl.bubbledrawer.ui.util.horizontalCutoutPadding
 import com.repl.bubbledrawer.ui.util.pageBackdrop
 import com.repl.bubbledrawer.ui.util.pageScroll
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.ListView
+import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -110,6 +120,9 @@ fun PinManageScreen(
     LaunchedEffect(model.cells.isNotEmpty()) {
         if (model.cells.isNotEmpty()) gridState.scrollToItem(0)
     }
+    LaunchedEffect(model.searchQuery) {
+        if (model.isSearching) gridState.scrollToItem(0)
+    }
 
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -133,7 +146,7 @@ fun PinManageScreen(
             ),
         ) {
             itemsIndexed(
-                items = model.cells,
+                items = model.displayedCells,
                 key = { _, cell -> cellKey(cell) },
                 contentType = { _, cell ->
                     when (cell) {
@@ -166,6 +179,7 @@ fun PinManageScreen(
                     is Cell.App -> AppCell(
                         app = cell.app,
                         manageMode = model.manageMode,
+                        pinned = model.isPinned(cell.app),
                         iconDp = iconDp,
                         textSp = textSp,
                         onTap = { if (model.manageMode) model.togglePin(cell.app) else onLaunch(cell.app) },
@@ -188,18 +202,21 @@ fun PinManageScreen(
                     manageLabel = manageLabel,
                     manageMode = model.manageMode,
                     onToggleManage = onToggleManage,
+                    model = model,
                 )
             }
         }
 
-        LetterBarOverlay(
-            letters = model.letters,
-            gridState = gridState,
-            cells = model.cells,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(top = if (chrome == Chrome.PANEL) 56.dp else 20.dp),
-        )
+        if (!model.isSearching) {
+            LetterBarOverlay(
+                letters = model.letters,
+                gridState = gridState,
+                cells = model.cells,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(top = if (chrome == Chrome.PANEL) 56.dp else 20.dp),
+            )
+        }
     }
 }
 
@@ -214,7 +231,45 @@ private fun cellKey(cell: Cell): String = when (cell) {
 }
 
 /**
- * The overlay panel's 56dp look-alike bar: title left, listview icon button right.
+ * The overlay panel's 56dp look-alike bar: title left, search + listview icon buttons right.
+ * When search is activated, expands into Miuix SearchBar with a circular grey Close button on the right.
+ */
+/**
+ * Miuix SearchBar container: lays out the Miuix [InputField] and [outsideEndAction]
+ * with smooth enter/exit transitions, without coupling to Navigation 3's NavigationBackHandler.
+ */
+@Composable
+fun MiuixSearchBar(
+    inputField: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    insideMargin: DpSize = DpSize(12.dp, 0.dp),
+    expanded: Boolean = true,
+    outsideEndAction: @Composable (() -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = insideMargin.height, horizontal = insideMargin.width),
+        ) {
+            inputField()
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandHorizontally() + slideInHorizontally(initialOffsetX = { it }),
+            exit = shrinkHorizontally() + slideOutHorizontally(targetOffsetX = { it }),
+        ) {
+            outsideEndAction?.invoke()
+        }
+    }
+}
+
+/**
+ * The overlay panel's 56dp look-alike bar: title left, search + listview icon buttons right.
+ * When search is activated, expands into Miuix SearchBar with a circular grey Close button on the right.
  */
 @Composable
 private fun PanelBar(
@@ -222,29 +277,94 @@ private fun PanelBar(
     manageLabel: String,
     manageMode: Boolean,
     onToggleManage: () -> Unit,
+    model: PinManageModel,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .padding(start = 16.dp, end = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = title,
-            modifier = Modifier.weight(1f),
-            color = MiuixTheme.colorScheme.onSurface,
-            style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Bold),
+    if (model.isSearching) {
+        MiuixSearchBar(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            insideMargin = DpSize(12.dp, 0.dp),
+            inputField = {
+                InputField(
+                    query = model.searchQuery,
+                    onQueryChange = { model.searchQuery = it },
+                    onSearch = { },
+                    expanded = true,
+                    onExpandedChange = { expanded ->
+                        if (!expanded) model.cancelSearch()
+                    },
+                    label = stringResource(R.string.search_hint),
+                )
+            },
+            expanded = true,
+            outsideEndAction = {
+                SearchCloseButton(onClick = model::cancelSearch)
+            },
         )
-        IconButton(
-            onClick = onToggleManage,
+    } else {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .padding(start = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = MiuixIcons.ListView,
-                contentDescription = manageLabel,
-                tint = if (manageMode) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+            Text(
+                text = title,
+                modifier = Modifier.weight(1f),
+                color = MiuixTheme.colorScheme.onSurface,
+                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Bold),
             )
+            IconButton(
+                onClick = model::startSearch,
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Search,
+                    contentDescription = stringResource(R.string.search),
+                    tint = MiuixTheme.colorScheme.onSurface,
+                )
+            }
+            IconButton(
+                onClick = onToggleManage,
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.ListView,
+                    contentDescription = manageLabel,
+                    tint = if (manageMode) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                )
+            }
         }
+    }
+}
+
+/**
+ * 圆形灰底 Close 图标用于取消搜索。
+ */
+@Composable
+fun SearchCloseButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .padding(end = 12.dp)
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(MiuixTheme.colorScheme.surfaceContainerHighest)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = MiuixIcons.Close,
+            contentDescription = stringResource(R.string.search_cancel),
+            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.size(16.dp),
+        )
     }
 }
 
@@ -365,6 +485,7 @@ private fun PinCell(
 private fun AppCell(
     app: BubbleApp,
     manageMode: Boolean,
+    pinned: Boolean = false,
     iconDp: Int,
     textSp: Int,
     onTap: () -> Unit,
@@ -374,7 +495,7 @@ private fun AppCell(
         AppTile(
             app = app,
             manageMode = manageMode,
-            pinned = false,
+            pinned = pinned,
             iconDp = iconDp,
             textSp = textSp,
             onTap = onTap,

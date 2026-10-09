@@ -18,14 +18,28 @@ import com.repl.bubbledrawer.ui.util.BlurredBar
 import com.repl.bubbledrawer.ui.util.barColor
 import com.repl.bubbledrawer.ui.util.rememberBlurBackdrop
 import com.repl.bubbledrawer.xposed.SettingsStore
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.ListView
+import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -66,33 +80,71 @@ class PinManageActivity : ComponentActivity() {
                 val scrollBehavior = MiuixScrollBehavior()
                 val backdrop = rememberBlurBackdrop()
                 val manageLabel = stringResourceFor(model)
+                BackHandler(enabled = model.isSearching) {
+                    model.cancelSearch()
+                }
                 Scaffold(
                     topBar = {
                         BlurredBar(backdrop = backdrop, scrollBehavior = scrollBehavior) {
-                            SmallTopAppBar(
-                                title = getString(R.string.slide_launch_app_settings_title),
-                                color = barColor(backdrop != null),
-                                scrollBehavior = scrollBehavior,
-                                navigationIcon = {
-                                    IconButton(onClick = { finish() }) {
-                                        Icon(
-                                             imageVector = MiuixIcons.Back,
-                                             contentDescription = getString(R.string.back),
+                            if (model.isSearching) {
+                                MiuixSearchBar(
+                                    modifier = Modifier
+                                        .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
+                                        .fillMaxWidth()
+                                        .height(56.dp),
+                                    insideMargin = DpSize(12.dp, 0.dp),
+                                    inputField = {
+                                        InputField(
+                                            query = model.searchQuery,
+                                            onQueryChange = { model.searchQuery = it },
+                                            onSearch = { },
+                                            expanded = true,
+                                            onExpandedChange = { expanded ->
+                                                if (!expanded) model.cancelSearch()
+                                            },
+                                            label = stringResource(R.string.search_hint),
                                         )
-                                    }
-                                },
-                                actions = {
-                                    IconButton(
-                                        onClick = model::toggleManageMode,
-                                    ) {
-                                        Icon(
-                                            imageVector = MiuixIcons.ListView,
-                                            contentDescription = manageLabel,
-                                            tint = if (model.manageMode) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
-                                        )
-                                    }
-                                },
-                            )
+                                    },
+                                    expanded = true,
+                                    outsideEndAction = {
+                                        SearchCloseButton(onClick = model::cancelSearch)
+                                    },
+                                )
+                            } else {
+                                SmallTopAppBar(
+                                    title = getString(R.string.slide_launch_app_settings_title),
+                                    color = barColor(backdrop != null),
+                                    scrollBehavior = scrollBehavior,
+                                    navigationIcon = {
+                                        IconButton(onClick = { finish() }) {
+                                            Icon(
+                                                 imageVector = MiuixIcons.Back,
+                                                 contentDescription = getString(R.string.back),
+                                            )
+                                        }
+                                    },
+                                    actions = {
+                                        IconButton(
+                                            onClick = model::startSearch,
+                                        ) {
+                                            Icon(
+                                                imageVector = MiuixIcons.Search,
+                                                contentDescription = stringResource(R.string.search),
+                                                tint = MiuixTheme.colorScheme.onSurface,
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = model::toggleManageMode,
+                                        ) {
+                                            Icon(
+                                                imageVector = MiuixIcons.ListView,
+                                                contentDescription = manageLabel,
+                                                tint = if (model.manageMode) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                                            )
+                                        }
+                                    },
+                                )
+                            }
                         }
                     },
                 ) { innerPadding ->

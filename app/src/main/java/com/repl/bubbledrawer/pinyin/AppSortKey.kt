@@ -24,12 +24,19 @@ data class BubbleApp(
     val usageCount: Int = 0,
     /** Precomputed at construction time, like `AbstractC7096c` does in its ctor (:323-324). */
     val sortKey: String = AppSortKey.of(label),
+    val initials: String = AppSortKey.initialsOf(label),
 )
 
 object AppSortKey {
 
     /** `AbstractC7096c.m25056u()` (:282-284): recompute key from label. */
     fun of(label: String): String = HanziToPinyin.sortKey(label)
+
+    /** Initials of each word/character in uppercase, e.g. "WX" for "微信". */
+    fun initialsOf(label: String): String =
+        HanziToPinyin.convert(label)
+            .mapNotNull { it.target.firstOrNull()?.uppercaseChar() }
+            .joinToString("")
 
     /** Section letter for a sort key: uppercase first char; digits AND symbols bucket "#" (the
      * index bar's tail glyph — the old "0" bucket is folded in per UI refactor). */
