@@ -65,10 +65,37 @@
     <string name="category_panel_summary">面板尺寸 · 图标与文字大小 · 外部收起方式</string>
     <string name="category_manage">收藏应用管理</string>
     <string name="category_manage_summary">排序与增删快捷启动应用</string>
+    <string name="category_experimental">实验性功能</string>
+    <string name="category_experimental_summary">Flyme 样式轻量小窗 · 手势转换 · 尺寸与居中</string>
     <string name="fan_hint">从屏幕左右下角向内滑出手势，即可展开环形扇形面板；手指移至图标上方松手即可快捷启动。若启用了小窗模式，应用将以悬浮小窗打开。</string>
     <string name="more_panel_hint">点击扇形面板上的“更多”图标即可打开更多应用面板，支持在全量应用列表中快速查找与启动。</string>
     <string name="search">搜索</string>
     <string name="search_hint">搜索应用</string>
     <string name="search_no_result">无搜索结果</string>
     <string name="search_cancel">取消搜索</string>
+
+    <!-- Experimental: Flyme-style Lightweight Freeform -->
+    <string name="exp_flyme_freeform_title">Flyme 样式轻量小窗</string>
+    <string name="exp_flyme_freeform_summary">直接打开为轻量小窗（即用即走），支持外部点击退出、小白条手势转换及窗口居中</string>
+    <string name="exp_section_window_tuning">窗口尺寸与位置</string>
+    <string name="exp_center_window">小窗居中显示</string>
+    <string name="exp_center_window_summary">修正 HyperOS 原版小窗偏上的问题，将小窗垂直居中置于屏幕中央</string>
+    <string name="exp_window_scale">小窗缩放比例</string>
+    <string name="exp_window_scale_hint" formatted="false">对齐 Flyme 视觉，默认 80% 视觉宽度（HyperOS 原版约 67%）</string>
+    <string name="exp_dim_background">背景暗化遮罩</string>
+    <string name="exp_dim_background_summary">轻量小窗呼出时为背景添加暗色蒙版，突出当前窗口焦点</string>
+    <string name="exp_section_gestures">小白条手势交互</string>
+    <string name="exp_outside_dismiss">点击外部关闭小窗</string>
+    <string name="exp_outside_dismiss_action">外部关闭手势</string>
+    <string name="exp_outside_dismiss_action_single">单击</string>
+    <string name="exp_outside_dismiss_action_double">双击</string>
+    <string name="exp_outside_dismiss_summary">轻量小窗核心体验：点击或双击小窗外部任意区域直接退出</string>
+    <string name="exp_swipe_up_mini">小白条上滑转为迷你小窗</string>
+    <string name="exp_swipe_up_mini_summary">快速上滑小白条直接挂起为侧边迷你小窗，替换原版关闭逻辑</string>
+    <string name="exp_swipe_up_hold_free">小白条上滑悬停转自由小窗</string>
+    <string name="exp_swipe_up_hold_free_summary">向上拖动并停留悬停时退出接管，转为 HyperOS 原生常驻自由小窗</string>
+    <string name="exp_swipe_down_fullscreen">小白条下滑全屏展开</string>
+    <string name="exp_swipe_down_fullscreen_summary">向下快速滑动小白条直接全屏化当前应用</string>
+    <string name="exp_section_info">说明</string>
+    <string name="exp_freeform_info">开启后，小窗将以轻量小窗模式启动。通过小白条上滑悬停转为自由小窗后，模块将直接取消接管，恢复 HyperOS 原生小窗的所有操作（左右拉伸调大小、顶部三点菜单等）。</string>
 </resources>

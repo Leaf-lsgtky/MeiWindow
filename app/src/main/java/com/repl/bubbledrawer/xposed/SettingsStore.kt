@@ -134,6 +134,39 @@ object SettingsStore {
         putInt(context, RemotePrefs.KEY_RECOMMEND_COUNT, snapped)
     }
 
+    /** 实验性：Flyme 样式轻量小窗设置 */
+    fun setFlymeFreeformEnabled(context: Context, enabled: Boolean) =
+        putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_ENABLED, enabled)
+
+    fun setFlymeFreeformCenter(context: Context, enabled: Boolean) =
+        putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_CENTER, enabled)
+
+    fun setFlymeFreeformScale(context: Context, scale: Int) =
+        putInt(context, RemotePrefs.KEY_FLYME_FREEFORM_SCALE, scale.coerceIn(RemotePrefs.FLYME_FREEFORM_SCALE_MIN, RemotePrefs.FLYME_FREEFORM_SCALE_MAX))
+
+    fun setFlymeFreeformOutsideDismiss(context: Context, enabled: Boolean) =
+        putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_OUTSIDE_DISMISS, enabled)
+
+    fun setFlymeFreeformOutsideDismissAction(context: Context, action: Int) =
+        putInt(context, RemotePrefs.KEY_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION, action.coerceIn(0, 1))
+
+    fun setFlymeFreeformSwipeUpMini(context: Context, enabled: Boolean) =
+        putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_SWIPE_UP_MINI, enabled)
+
+    fun setFlymeFreeformSwipeUpHoldFree(context: Context, enabled: Boolean) =
+        putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE, enabled)
+
+    fun setFlymeFreeformSwipeDownFull(context: Context, enabled: Boolean) =
+        putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_SWIPE_DOWN_FULL, enabled)
+
+    fun setFlymeFreeformDimBg(context: Context, enabled: Boolean) =
+        putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_DIM_BG, enabled)
+
+    private fun putBoolean(context: Context, key: String, value: Boolean) {
+        RemoteBridge.local(context).edit().putBoolean(key, value).apply()
+        RemoteBridge.remote?.edit()?.putBoolean(key, value)?.apply()
+    }
+
     private fun putInt(context: Context, key: String, value: Int) {
         RemoteBridge.local(context).edit().putInt(key, value).apply()
         RemoteBridge.remote?.edit()?.putInt(key, value)?.apply()

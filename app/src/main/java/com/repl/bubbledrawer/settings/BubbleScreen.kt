@@ -10,4 +10,5 @@ sealed interface BubbleScreen : NavKey {
     data object Trigger : BubbleScreen
     data object Fan : BubbleScreen
     data object MorePanel : BubbleScreen
+    data object Experimental : BubbleScreen
 }

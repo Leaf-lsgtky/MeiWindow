@@ -683,7 +683,9 @@ class FanHost(
         hideMorePanel(animated = false)
         val snap = RemotePrefs.read(prefs)
         val strategy: ILaunchStrategy =
-            if (snap.freeform) FreeformLaunchStrategy(rect) else FullscreenLaunchStrategy()
+            if (snap.freeform) {
+                if (snap.flymeFreeformEnabled) FreeformLaunchStrategy() else FreeformLaunchStrategy(rect)
+            } else FullscreenLaunchStrategy()
         val ok = runCatching { strategy.launch(context, app) }.getOrDefault(false)
         LaunchCountStore.increment(context, app.packageName, app.userId)
         com.repl.bubbledrawer.data.predict.AppPredictor.recordLaunch(context, app.packageName, app.userId)

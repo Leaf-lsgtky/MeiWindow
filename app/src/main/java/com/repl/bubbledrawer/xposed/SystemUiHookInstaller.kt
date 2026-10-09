@@ -20,6 +20,7 @@ class SystemUiHookInstaller(
     private val bound = AtomicBoolean(false)
     private var inputMonitor: CornerInputMonitor? = null
     private var appClassLoader: ClassLoader? = null
+    private var flymeController: com.repl.bubbledrawer.launch.FlymeFreeformController? = null
 
     /** captured when the Application first runs — needed to rebuild after a hot reload */
     private var appContext: Context? = null
@@ -27,6 +28,12 @@ class SystemUiHookInstaller(
     fun install(classLoader: ClassLoader) {
         // Keep the resolved classloader for the back-gesture corner gate below.
         appClassLoader = classLoader
+        // Install hooks for Flyme-style lightweight freeform window
+        runCatching {
+            com.repl.bubbledrawer.launch.FlymeFreeformController.installHooks(module, prefs, classLoader)
+        }.onFailure {
+            module.log(Log.WARN, TAG, "FLYME_FREEFORM_HOOKS_INSTALL_FAILED", it)
+        }
         // Which class creates the monitors that carry DO_NOT_PILFER (see the class docs) —
         // read-only, and installed before ours exists so creation order is visible too.
         MonitorCreationObserver(module) { priority, message, error ->
@@ -74,6 +81,8 @@ class SystemUiHookInstaller(
      * so [reinstall] can bind again.
      */
     fun dispose() {
+        runCatching { flymeController?.dispose() }
+        flymeController = null
         runCatching { inputMonitor?.dispose() }
         inputMonitor = null
         bound.set(false)
@@ -107,6 +116,16 @@ class SystemUiHookInstaller(
                 module.log(priority, TAG, message, error)
             }
             inputMonitor = monitor
+
+            // Wire FlymeFreeformController for Flyme-style lightweight window features
+            val freeformCtrl = com.repl.bubbledrawer.launch.FlymeFreeformController(
+                module, prefs, context, appClassLoader ?: context.classLoader
+            )
+            flymeController = freeformCtrl
+            freeformCtrl.pilferCallback = { monitor.pilfer() }
+            monitor.outsideTapHandler = { ev -> freeformCtrl.onInterceptTouchEvent(ev) }
+            freeformCtrl.start()
+
             monitor.start()
             module.log(
                 Log.INFO,

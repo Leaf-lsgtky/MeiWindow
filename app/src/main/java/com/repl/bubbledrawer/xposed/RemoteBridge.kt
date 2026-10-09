@@ -157,6 +157,15 @@ object RemoteBridge {
             .putInt(RemotePrefs.KEY_PANEL_DISMISS_OUTSIDE, snap.panelDismissOutside)
             .putBoolean(RemotePrefs.KEY_RECOMMEND_ENABLED, snap.recommendEnabled)
             .putInt(RemotePrefs.KEY_RECOMMEND_COUNT, snap.recommendCount)
+            .putBoolean(RemotePrefs.KEY_FLYME_FREEFORM_ENABLED, snap.flymeFreeformEnabled)
+            .putBoolean(RemotePrefs.KEY_FLYME_FREEFORM_CENTER, snap.flymeFreeformCenter)
+            .putInt(RemotePrefs.KEY_FLYME_FREEFORM_SCALE, snap.flymeFreeformScale)
+            .putBoolean(RemotePrefs.KEY_FLYME_FREEFORM_OUTSIDE_DISMISS, snap.flymeFreeformOutsideDismiss)
+            .putInt(RemotePrefs.KEY_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION, snap.flymeFreeformOutsideDismissAction)
+            .putBoolean(RemotePrefs.KEY_FLYME_FREEFORM_SWIPE_UP_MINI, snap.flymeFreeformSwipeUpMini)
+            .putBoolean(RemotePrefs.KEY_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE, snap.flymeFreeformSwipeUpHoldFree)
+            .putBoolean(RemotePrefs.KEY_FLYME_FREEFORM_SWIPE_DOWN_FULL, snap.flymeFreeformSwipeDownFull)
+            .putBoolean(RemotePrefs.KEY_FLYME_FREEFORM_DIM_BG, snap.flymeFreeformDimBg)
         if (localPins != null) {
             editor.putString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, localPins)
         }

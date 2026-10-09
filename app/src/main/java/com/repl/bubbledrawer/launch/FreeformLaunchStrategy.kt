@@ -100,9 +100,24 @@ class FreeformLaunchStrategy(private val position: Rect? = null) : ILaunchStrate
     }
 
     /** HyperOS path — `MiuiMultiWindowUtils.getActivityOptions(...)`, positioned when asked. */
-    private fun miuiOptions(context: Context, pkg: String): ActivityOptions? =
-        MiuiFreeform.activityOptions(context, pkg, noCheck = true, position = position)
-            ?.let { MiuiFreeform.withoutFreeformAnimation(it) }
+    private fun miuiOptions(context: Context, pkg: String): ActivityOptions? {
+        val snap = com.repl.bubbledrawer.xposed.SettingsStore.snapshot(context)
+        val pos = if (snap.flymeFreeformEnabled) null else position
+
+        return (MiuiFreeform.activityOptions(context, pkg, noCheck = true, position = pos)
+            ?: ActivityOptions.makeBasic().also {
+                runCatching {
+                    ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+                        .invoke(it, 5) // 5 = WINDOWING_MODE_FREEFORM
+                }
+            })
+            .let { MiuiFreeform.withoutFreeformAnimation(it) }
+            .also { opts ->
+                if (pos != null) {
+                    runCatching { opts.setLaunchBounds(pos) }
+                }
+            }
+    }
 
     private fun aospOptions(context: Context): ActivityOptions {
         val opts = ActivityOptions.makeBasic()

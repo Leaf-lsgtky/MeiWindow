@@ -52,6 +52,9 @@ class ModuleMain : XposedModule() {
                 "Landroid/view/inputmethod/InputMethodManager;",
                 "Landroid/app/ActivityThread;",
                 "Landroid/content/pm/IPackageManager;",
+                "Landroid/util/MiuiFreeformLaunchConfig;",
+                "Landroid/util/MiuiMultiWindowUtils;",
+                "Lcom/android/wm/shell/",
             )
         }.getOrDefault(false)
         log(if (exempted) Log.INFO else Log.WARN, TAG, "HIDDEN_API_EXEMPT=$exempted")

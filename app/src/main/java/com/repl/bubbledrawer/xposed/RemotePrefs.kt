@@ -118,6 +118,28 @@ object RemotePrefs {
     const val RECOMMEND_COUNT_MIN = 4
     const val RECOMMEND_COUNT_MAX = 20
     const val RECOMMEND_COUNT_STEP = 4
+    /** 实验性：Flyme 样式轻量小窗设置 */
+    const val KEY_FLYME_FREEFORM_ENABLED = "flyme_freeform_enabled"
+    const val KEY_FLYME_FREEFORM_CENTER = "flyme_freeform_center"
+    const val KEY_FLYME_FREEFORM_SCALE = "flyme_freeform_scale"
+    const val KEY_FLYME_FREEFORM_OUTSIDE_DISMISS = "flyme_freeform_outside_dismiss"
+    const val KEY_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION = "flyme_freeform_outside_dismiss_action"
+    const val KEY_FLYME_FREEFORM_SWIPE_UP_MINI = "flyme_freeform_swipe_up_mini"
+    const val KEY_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE = "flyme_freeform_swipe_up_hold_free"
+    const val KEY_FLYME_FREEFORM_SWIPE_DOWN_FULL = "flyme_freeform_swipe_down_full"
+    const val KEY_FLYME_FREEFORM_DIM_BG = "flyme_freeform_dim_bg"
+
+    const val DEFAULT_FLYME_FREEFORM_ENABLED = false
+    const val DEFAULT_FLYME_FREEFORM_CENTER = true
+    const val DEFAULT_FLYME_FREEFORM_SCALE = 80
+    const val FLYME_FREEFORM_SCALE_MIN = 60
+    const val FLYME_FREEFORM_SCALE_MAX = 95
+    const val DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS = true
+    const val DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION = 0
+    const val DEFAULT_FLYME_FREEFORM_SWIPE_UP_MINI = true
+    const val DEFAULT_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE = true
+    const val DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL = true
+    const val DEFAULT_FLYME_FREEFORM_DIM_BG = true
 
     @androidx.compose.runtime.Immutable
     data class Snapshot(
@@ -148,6 +170,16 @@ object RemotePrefs {
         /** 推荐应用开关与显示数量（4, 8, 12, 16, 20） */
         val recommendEnabled: Boolean = DEFAULT_RECOMMEND_ENABLED,
         val recommendCount: Int = DEFAULT_RECOMMEND_COUNT,
+        /** 实验性：Flyme 样式轻量小窗设置 */
+        val flymeFreeformEnabled: Boolean = DEFAULT_FLYME_FREEFORM_ENABLED,
+        val flymeFreeformCenter: Boolean = DEFAULT_FLYME_FREEFORM_CENTER,
+        val flymeFreeformScale: Int = DEFAULT_FLYME_FREEFORM_SCALE,
+        val flymeFreeformOutsideDismiss: Boolean = DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS,
+        val flymeFreeformOutsideDismissAction: Int = DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION,
+        val flymeFreeformSwipeUpMini: Boolean = DEFAULT_FLYME_FREEFORM_SWIPE_UP_MINI,
+        val flymeFreeformSwipeUpHoldFree: Boolean = DEFAULT_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE,
+        val flymeFreeformSwipeDownFull: Boolean = DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL,
+        val flymeFreeformDimBg: Boolean = DEFAULT_FLYME_FREEFORM_DIM_BG,
     )
 
     fun enabledFor(side: com.repl.bubbledrawer.gesture.SpySide): (Snapshot) -> Boolean = { snap ->
@@ -188,6 +220,15 @@ object RemotePrefs {
             fanPressureSensitivity = sp.getInt(KEY_FAN_PRESSURE_SENSITIVITY, DEFAULT_FAN_PRESSURE_SENSITIVITY).coerceIn(0, 2),
             recommendEnabled = sp.getBoolean(KEY_RECOMMEND_ENABLED, DEFAULT_RECOMMEND_ENABLED),
             recommendCount = snappedRecCount,
+            flymeFreeformEnabled = sp.getBoolean(KEY_FLYME_FREEFORM_ENABLED, DEFAULT_FLYME_FREEFORM_ENABLED),
+            flymeFreeformCenter = sp.getBoolean(KEY_FLYME_FREEFORM_CENTER, DEFAULT_FLYME_FREEFORM_CENTER),
+            flymeFreeformScale = sp.getInt(KEY_FLYME_FREEFORM_SCALE, DEFAULT_FLYME_FREEFORM_SCALE).coerceIn(FLYME_FREEFORM_SCALE_MIN, FLYME_FREEFORM_SCALE_MAX),
+            flymeFreeformOutsideDismiss = sp.getBoolean(KEY_FLYME_FREEFORM_OUTSIDE_DISMISS, DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS),
+            flymeFreeformOutsideDismissAction = sp.getInt(KEY_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION, DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION).coerceIn(0, 1),
+            flymeFreeformSwipeUpMini = sp.getBoolean(KEY_FLYME_FREEFORM_SWIPE_UP_MINI, DEFAULT_FLYME_FREEFORM_SWIPE_UP_MINI),
+            flymeFreeformSwipeUpHoldFree = sp.getBoolean(KEY_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE, DEFAULT_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE),
+            flymeFreeformSwipeDownFull = sp.getBoolean(KEY_FLYME_FREEFORM_SWIPE_DOWN_FULL, DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL),
+            flymeFreeformDimBg = sp.getBoolean(KEY_FLYME_FREEFORM_DIM_BG, DEFAULT_FLYME_FREEFORM_DIM_BG),
             pins = sp.getString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, "").orEmpty(),
         )
     }

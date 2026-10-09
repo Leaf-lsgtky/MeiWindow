@@ -205,6 +205,13 @@ class CornerInputMonitor(
     var monitorActive: Boolean = false
         private set
 
+    var outsideTapHandler: ((MotionEvent) -> Boolean)? = null
+
+    fun pilfer(): Boolean = monitor?.let {
+        runCatching { it.pilferPointers(); true }.getOrDefault(false)
+    } ?: false
+
+
     // ------------------------------------------------------------ transport B state
 
     private val inputFeaturesField: Field =
@@ -398,6 +405,9 @@ class CornerInputMonitor(
     /** One dispatcher event from the gesture monitor; returns whether WE claimed the stream. */
     private fun onMonitorEvent(event: InputEvent): Boolean {
         val ev = event as? MotionEvent ?: return false
+        if (outsideTapHandler?.invoke(ev) == true) {
+            return true
+        }
         if (ev.deviceId < 0) {
             // Injected by someone else (MiuiHome's own passthrough tap, a test harness, …).
             // deviceId -1 is the platform's injected marker.

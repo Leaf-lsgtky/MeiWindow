@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
                                 onNavigateToTrigger = { backStack.add(BubbleScreen.Trigger) },
                                 onNavigateToFan = { backStack.add(BubbleScreen.Fan) },
                                 onNavigateToMorePanel = { backStack.add(BubbleScreen.MorePanel) },
+                                onNavigateToExperimental = { backStack.add(BubbleScreen.Experimental) },
                             )
                         }
                         entry<BubbleScreen.Trigger>(swipeDismiss = swipeBack) {
@@ -96,6 +97,15 @@ class MainActivity : ComponentActivity() {
                         }
                         entry<BubbleScreen.MorePanel>(swipeDismiss = swipeBack) {
                             MorePanelSettingsScreen(
+                                state = state,
+                                actions = actions,
+                                onBack = {
+                                    if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+                                },
+                            )
+                        }
+                        entry<BubbleScreen.Experimental>(swipeDismiss = swipeBack) {
+                            ExperimentalSettingsScreen(
                                 state = state,
                                 actions = actions,
                                 onBack = {

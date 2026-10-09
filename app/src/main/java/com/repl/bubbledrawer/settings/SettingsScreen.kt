@@ -41,6 +41,7 @@ fun MainSettingsScreen(
     onNavigateToTrigger: () -> Unit,
     onNavigateToFan: () -> Unit,
     onNavigateToMorePanel: () -> Unit,
+    onNavigateToExperimental: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -139,6 +140,13 @@ fun MainSettingsScreen(
                             title = stringResource(R.string.category_manage),
                             summary = stringResource(R.string.category_manage_summary),
                             onClick = { actions.openManage(context) },
+                        )
+                    },
+                    CardItem("experimental") {
+                        ArrowRow(
+                            title = stringResource(R.string.category_experimental),
+                            summary = stringResource(R.string.category_experimental_summary),
+                            onClick = onNavigateToExperimental,
                         )
                     },
                 ),
@@ -487,6 +495,194 @@ fun MorePanelSettingsScreen(
             )
 
             item(key = "bottom-spacer") { PageBottomSpacer() }
+        }
+    }
+}
+
+/**
+ * Experimental features subpage: Flyme-style lightweight freeform window,
+ * gesture transitions, and window centering/scaling.
+ */
+@Composable
+fun ExperimentalSettingsScreen(
+    state: SettingsUiState,
+    actions: SettingsActions,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val snap = state.snapshot
+    val scrollBehavior = MiuixScrollBehavior()
+    val backdrop = rememberBlurBackdrop()
+
+    Scaffold(
+        topBar = {
+            BlurredBar(backdrop = backdrop, scrollBehavior = scrollBehavior) {
+                TopAppBar(
+                    title = stringResource(R.string.category_experimental),
+                    color = barColor(backdrop != null),
+                    scrollBehavior = scrollBehavior,
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                imageVector = MiuixIcons.Back,
+                                contentDescription = stringResource(R.string.back),
+                            )
+                        }
+                    },
+                )
+            }
+        },
+        modifier = modifier,
+    ) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .pageBackdrop(backdrop)
+                .pageScroll(scrollBehavior),
+            contentPadding = pageContentPadding(innerPadding),
+        ) {
+            item(key = "exp-lead") { LeadSpacer() }
+
+            // --- 核心总开关 ---
+            item(key = "exp-master-title") {
+                SmallTitle(text = stringResource(R.string.exp_flyme_freeform_title))
+            }
+            groupedCardItems(
+                keyPrefix = "exp-master",
+                items = listOf(
+                    CardItem("enable-flyme-freeform") {
+                        SwitchRow(
+                            title = stringResource(R.string.exp_flyme_freeform_title),
+                            checked = snap.flymeFreeformEnabled,
+                            onCheckedChange = actions::setFlymeFreeformEnabled,
+                        )
+                    },
+                    CardItem("enable-flyme-freeform-hint") {
+                        SliderHintRow(stringResource(R.string.exp_flyme_freeform_summary))
+                    },
+                ),
+            )
+
+            // --- 窗口尺寸与位置 ---
+            item(key = "exp-window-title") {
+                SmallTitle(text = stringResource(R.string.exp_section_window_tuning))
+            }
+            groupedCardItems(
+                keyPrefix = "exp-window",
+                items = buildList {
+                    add(CardItem("center-window") {
+                        SwitchRow(
+                            title = stringResource(R.string.exp_center_window),
+                            checked = snap.flymeFreeformCenter,
+                            onCheckedChange = actions::setFlymeFreeformCenter,
+                        )
+                    })
+                    add(CardItem("center-window-hint") {
+                        SliderHintRow(stringResource(R.string.exp_center_window_summary))
+                    })
+                    add(CardItem("scale-window") {
+                        IntSliderRow(
+                            title = stringResource(R.string.exp_window_scale),
+                            value = snap.flymeFreeformScale,
+                            min = RemotePrefs.FLYME_FREEFORM_SCALE_MIN,
+                            max = RemotePrefs.FLYME_FREEFORM_SCALE_MAX,
+                            valueText = { stringResource(R.string.pct_value, it) },
+                            onCommit = actions::setFlymeFreeformScale,
+                        )
+                    })
+                    add(CardItem("scale-window-hint") {
+                        SliderHintRow(stringResource(R.string.exp_window_scale_hint))
+                    })
+                    add(CardItem("dim-bg") {
+                        SwitchRow(
+                            title = stringResource(R.string.exp_dim_background),
+                            checked = snap.flymeFreeformDimBg,
+                            onCheckedChange = actions::setFlymeFreeformDimBg,
+                        )
+                    })
+                    add(CardItem("dim-bg-hint") {
+                        SliderHintRow(stringResource(R.string.exp_dim_background_summary))
+                    })
+                },
+            )
+
+            // --- 小白条手势交互 ---
+            item(key = "exp-gestures-title") {
+                SmallTitle(text = stringResource(R.string.exp_section_gestures))
+            }
+            groupedCardItems(
+                keyPrefix = "exp-gestures",
+                items = buildList {
+                    add(CardItem("outside-dismiss") {
+                        SwitchRow(
+                            title = stringResource(R.string.exp_outside_dismiss),
+                            checked = snap.flymeFreeformOutsideDismiss,
+                            onCheckedChange = actions::setFlymeFreeformOutsideDismiss,
+                        )
+                    })
+                    if (snap.flymeFreeformOutsideDismiss) {
+                        add(CardItem("outside-dismiss-action") {
+                            DropdownRow(
+                                title = stringResource(R.string.exp_outside_dismiss_action),
+                                items = listOf(
+                                    stringResource(R.string.exp_outside_dismiss_action_single),
+                                    stringResource(R.string.exp_outside_dismiss_action_double),
+                                ),
+                                selectedIndex = snap.flymeFreeformOutsideDismissAction,
+                                onSelect = actions::setFlymeFreeformOutsideDismissAction,
+                            )
+                        })
+                    }
+                    add(CardItem("outside-dismiss-hint") {
+                        SliderHintRow(stringResource(R.string.exp_outside_dismiss_summary))
+                    })
+                    add(CardItem("swipe-up-mini") {
+                        SwitchRow(
+                            title = stringResource(R.string.exp_swipe_up_mini),
+                            checked = snap.flymeFreeformSwipeUpMini,
+                            onCheckedChange = actions::setFlymeFreeformSwipeUpMini,
+                        )
+                    })
+                    add(CardItem("swipe-up-mini-hint") {
+                        SliderHintRow(stringResource(R.string.exp_swipe_up_mini_summary))
+                    })
+                    add(CardItem("swipe-up-hold-free") {
+                        SwitchRow(
+                            title = stringResource(R.string.exp_swipe_up_hold_free),
+                            checked = snap.flymeFreeformSwipeUpHoldFree,
+                            onCheckedChange = actions::setFlymeFreeformSwipeUpHoldFree,
+                        )
+                    })
+                    add(CardItem("swipe-up-hold-free-hint") {
+                        SliderHintRow(stringResource(R.string.exp_swipe_up_hold_free_summary))
+                    })
+                    add(CardItem("swipe-down-full") {
+                        SwitchRow(
+                            title = stringResource(R.string.exp_swipe_down_fullscreen),
+                            checked = snap.flymeFreeformSwipeDownFull,
+                            onCheckedChange = actions::setFlymeFreeformSwipeDownFull,
+                        )
+                    })
+                    add(CardItem("swipe-down-full-hint") {
+                        SliderHintRow(stringResource(R.string.exp_swipe_down_fullscreen_summary))
+                    })
+                },
+            )
+
+            // --- 说明 ---
+            item(key = "exp-info-title") {
+                SmallTitle(text = stringResource(R.string.exp_section_info))
+            }
+            groupedCardItems(
+                keyPrefix = "exp-info",
+                items = listOf(
+                    CardItem("info-text") {
+                        SliderHintRow(stringResource(R.string.exp_freeform_info))
+                    },
+                ),
+            )
+
+            item(key = "exp-bottom-spacer") { PageBottomSpacer() }
         }
     }
 }

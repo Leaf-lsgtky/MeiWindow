@@ -28,6 +28,15 @@ interface SettingsActions {
     fun setFanPressureSensitivity(sensitivity: Int)
     fun setRecommendEnabled(enabled: Boolean)
     fun setRecommendCount(count: Int)
+    fun setFlymeFreeformEnabled(enabled: Boolean)
+    fun setFlymeFreeformCenter(enabled: Boolean)
+    fun setFlymeFreeformScale(scale: Int)
+    fun setFlymeFreeformOutsideDismiss(enabled: Boolean)
+    fun setFlymeFreeformOutsideDismissAction(action: Int)
+    fun setFlymeFreeformSwipeUpMini(enabled: Boolean)
+    fun setFlymeFreeformSwipeUpHoldFree(enabled: Boolean)
+    fun setFlymeFreeformSwipeDownFull(enabled: Boolean)
+    fun setFlymeFreeformDimBg(enabled: Boolean)
     fun openManage(context: Context)
 }
 
@@ -51,6 +60,15 @@ class StoreSettingsActions(private val context: Context) : SettingsActions {
     override fun setFanPressureSensitivity(sensitivity: Int) = SettingsStore.setFanPressureSensitivity(context, sensitivity)
     override fun setRecommendEnabled(enabled: Boolean) = SettingsStore.setRecommendEnabled(context, enabled)
     override fun setRecommendCount(count: Int) = SettingsStore.setRecommendCount(context, count)
+    override fun setFlymeFreeformEnabled(enabled: Boolean) = SettingsStore.setFlymeFreeformEnabled(context, enabled)
+    override fun setFlymeFreeformCenter(enabled: Boolean) = SettingsStore.setFlymeFreeformCenter(context, enabled)
+    override fun setFlymeFreeformScale(scale: Int) = SettingsStore.setFlymeFreeformScale(context, scale)
+    override fun setFlymeFreeformOutsideDismiss(enabled: Boolean) = SettingsStore.setFlymeFreeformOutsideDismiss(context, enabled)
+    override fun setFlymeFreeformOutsideDismissAction(action: Int) = SettingsStore.setFlymeFreeformOutsideDismissAction(context, action)
+    override fun setFlymeFreeformSwipeUpMini(enabled: Boolean) = SettingsStore.setFlymeFreeformSwipeUpMini(context, enabled)
+    override fun setFlymeFreeformSwipeUpHoldFree(enabled: Boolean) = SettingsStore.setFlymeFreeformSwipeUpHoldFree(context, enabled)
+    override fun setFlymeFreeformSwipeDownFull(enabled: Boolean) = SettingsStore.setFlymeFreeformSwipeDownFull(context, enabled)
+    override fun setFlymeFreeformDimBg(enabled: Boolean) = SettingsStore.setFlymeFreeformDimBg(context, enabled)
     override fun openManage(context: Context) {
         context.startActivity(
             android.content.Intent(context, com.repl.bubbledrawer.pin.PinManageActivity::class.java),
