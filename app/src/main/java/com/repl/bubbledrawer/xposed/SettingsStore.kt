@@ -167,6 +167,13 @@ object SettingsStore {
     fun setContactBar(context: Context, enabled: Boolean) =
         putBoolean(context, RemotePrefs.KEY_CONTACT_BAR, enabled)
 
+    /** 联系人条尺寸阈值（屏幕宽度百分比，0 = 不按尺寸隐藏）。 */
+    fun setContactBarMinWidthPct(context: Context, pct: Int) = putInt(
+        context,
+        RemotePrefs.KEY_CONTACT_BAR_MIN_WIDTH_PCT,
+        pct.coerceIn(RemotePrefs.CONTACT_BAR_MIN_WIDTH_MIN, RemotePrefs.CONTACT_BAR_MIN_WIDTH_MAX),
+    )
+
     private fun putBoolean(context: Context, key: String, value: Boolean) {
         RemoteBridge.local(context).edit().putBoolean(key, value).apply()
         RemoteBridge.remote?.edit()?.putBoolean(key, value)?.apply()

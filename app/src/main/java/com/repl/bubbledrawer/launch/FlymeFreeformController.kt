@@ -639,14 +639,20 @@ class FlymeFreeformController(
                 val token = tokenCls.getConstructor().newInstance()
                 val receiverInterface = classLoader.loadClass("android.view.SurfaceControlInputReceiver")
 
-                val proxy = Proxy.newProxyInstance(classLoader, arrayOf(receiverInterface)) { _, method, args ->
-                    if (method.name == "onInputEvent" && args != null && args.isNotEmpty()) {
-                        val event = args[0] as? InputEvent
-                        handleInputEvent(event)
-                    } else if (method.name == "toString") {
-                        "SurfaceControlInputReceiverProxy"
-                    } else {
-                        null
+                val proxy = Proxy.newProxyInstance(classLoader, arrayOf(receiverInterface)) { instance, method, args ->
+                    when (method.name) {
+                        // Same proxy pitfall as the notification listener: a null `equals` result
+                        // breaks any Set/List operation that compares this object.
+                        "equals" -> instance === args?.firstOrNull()
+                        "hashCode" -> System.identityHashCode(instance)
+                        "toString" -> "SurfaceControlInputReceiverProxy"
+                        "onInputEvent" -> {
+                            if (args != null && args.isNotEmpty()) {
+                                handleInputEvent(args[0] as? InputEvent)
+                            }
+                            null
+                        }
+                        else -> null
                     }
                 }
 
@@ -873,7 +879,44 @@ class FlymeFreeformController(
             hookTopCaptionMove(module, classLoader)
             hookBottomCaptionGestures(module, prefs, classLoader)
             hookResizeFocus(module, classLoader)
+            hookTaskExit(module, classLoader)
             hookGestureAnimation(module, classLoader)
+        }
+
+        /**
+         * "This window is going away" — `MiuiFreeformModeController.exitFreeformTask(int, …)` is the
+         * single decision point for every close path (顶部 ✕、小白条上滑关闭、迷你小窗上滑退出、
+         * 上滑全屏化也会走到这里). Consumers that draw around the window (the contact bar) must stop
+         * following the closing animation and remove themselves immediately.
+         */
+        private fun hookTaskExit(
+            module: XposedModule,
+            classLoader: ClassLoader,
+        ) {
+            val candidates = listOf(
+                "com.android.wm.shell.multitasking.miuifreeform.MiuiFreeformModeController",
+                "com.android.wm.shell.multitasking.miuifreeform.MiuiFreeformModeController\$MiuiFreeformModeControlImpl",
+            )
+            var installed = 0
+            for (name in candidates) {
+                val cls = runCatching { classLoader.loadClass(name) }.getOrNull() ?: continue
+                cls.declaredMethods
+                    .filter { it.name == "exitFreeformTask" && it.parameterTypes.firstOrNull() == Int::class.javaPrimitiveType }
+                    .forEach { m ->
+                        runCatching {
+                            module.hook(m)
+                                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                                .setId("bubbledrawer.freeform.exit.${name.substringAfterLast('.')}.${m.parameterCount}")
+                                .intercept { chain ->
+                                    val taskId = (chain.args.firstOrNull() as? Number)?.toInt() ?: -1
+                                    if (taskId > 0) freeformObserver?.onFreeformTaskClosing(taskId)
+                                    chain.proceed()
+                                }
+                            installed++
+                        }
+                    }
+            }
+            log("HOOK_INSTALLED_exitFreeformTask count=$installed")
         }
 
         /**

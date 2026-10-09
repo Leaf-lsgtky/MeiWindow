@@ -52,6 +52,8 @@ object FreeformTask {
         val isMiniPinedState = find(cls, "isMiniPinedState")
         val isNormalState = find(cls, "isNormalState")
         val isInPinMode = find(cls, "isInPinMode")
+        val enterState = find(cls, "getEnterState")
+        val cornerRadius = find(cls, "getCornerRadius")
 
         private fun find(cls: Class<*>, name: String) =
             runCatching { cls.getMethod(name) }.getOrNull()
@@ -106,6 +108,28 @@ object FreeformTask {
 
     fun isAnimating(info: Any?): Boolean =
         read(info) { it.isInAnimating } as? Boolean ?: false
+
+    /**
+     * The window's own corner radius, in screen pixels (the ROM divides it by the surface scale when
+     * drawing into the scaled leash, so the stored value is already on-screen). The bar uses it so it
+     * matches the window instead of looking like a pill. Null when unavailable.
+     */
+    fun cornerRadius(info: Any?): Float? {
+        val value = read(info) { it.cornerRadius } as? Number ?: return null
+        val radius = value.toFloat()
+        return if (radius > 0f) radius else null
+    }
+
+    /**
+     * EXITING: the ROM has committed to leaving freeform — the swipe-up close gesture, the ✕ button,
+     * or a maximize. `MiuiFreeformModeTaskInfo.EXITING = 1` (set by
+     * `MiuiFreeformModeMoveHandler.handleMotionEvents:207` and
+     * `MiuiFreeformModeAnimation.startMaximizeShellTransition:5553`).
+     */
+    fun isExiting(info: Any?): Boolean {
+        val state = read(info) { it.enterState } as? Number ?: return false
+        return state.toInt() == 1
+    }
 
     fun packageName(info: Any?): String? =
         (read(info) { it.packageName } as? String)
@@ -164,6 +188,13 @@ interface FreeformObserver {
     fun onFreeformTaskAppeared(taskInfo: Any)
     fun onFreeformTaskVanished(taskId: Int)
     fun onFreeformTaskModeChanged(taskInfo: Any, oldMode: Int, newMode: Int)
+
+    /**
+     * The ROM has started closing this window (swipe-up dismiss, ✕, maximize). The bar must disappear
+     * at once instead of riding the closing animation — `MiuiFreeformModeController.exitFreeformTask`
+     * is the point where the decision is made.
+     */
+    fun onFreeformTaskClosing(taskId: Int) {}
 
     /**
      * The window the user is manipulating right now (resize / move gesture). With two 小窗 open the

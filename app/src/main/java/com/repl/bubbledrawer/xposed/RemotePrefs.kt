@@ -149,6 +149,16 @@ object RemotePrefs {
     const val KEY_CONTACT_BAR = "contact_bar_enabled"
     const val DEFAULT_CONTACT_BAR = true
 
+    /**
+     * 联系人条的尺寸阈值：小窗可视宽度小于「屏幕宽度 × N%」时整条隐藏（0 = 不按尺寸隐藏）。
+     * 默认 35% —— 这台机器上 ROM 默认小窗的宽度约为屏幕的 70%，所以默认值等于
+     * "小窗缩到大约一半以下就不显示"。
+     */
+    const val KEY_CONTACT_BAR_MIN_WIDTH_PCT = "contact_bar_min_width_pct"
+    const val DEFAULT_CONTACT_BAR_MIN_WIDTH_PCT = 35
+    const val CONTACT_BAR_MIN_WIDTH_MIN = 0
+    const val CONTACT_BAR_MIN_WIDTH_MAX = 90
+
     @androidx.compose.runtime.Immutable
     data class Snapshot(
         val enabled: Boolean,
@@ -190,6 +200,8 @@ object RemotePrefs {
         val flymeFreeformDimBg: Boolean = DEFAULT_FLYME_FREEFORM_DIM_BG,
         /** 小窗底部联系人条（Flyme「联系人头像」） */
         val contactBar: Boolean = DEFAULT_CONTACT_BAR,
+        /** 联系人条尺寸阈值：小窗宽度低于屏幕宽度的 N% 时隐藏（0 = 关闭该限制） */
+        val contactBarMinWidthPct: Int = DEFAULT_CONTACT_BAR_MIN_WIDTH_PCT,
     )
 
     fun enabledFor(side: com.repl.bubbledrawer.gesture.SpySide): (Snapshot) -> Boolean = { snap ->
@@ -240,6 +252,8 @@ object RemotePrefs {
             flymeFreeformSwipeDownFull = sp.getBoolean(KEY_FLYME_FREEFORM_SWIPE_DOWN_FULL, DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL),
             flymeFreeformDimBg = sp.getBoolean(KEY_FLYME_FREEFORM_DIM_BG, DEFAULT_FLYME_FREEFORM_DIM_BG),
             contactBar = sp.getBoolean(KEY_CONTACT_BAR, DEFAULT_CONTACT_BAR),
+            contactBarMinWidthPct = sp.getInt(KEY_CONTACT_BAR_MIN_WIDTH_PCT, DEFAULT_CONTACT_BAR_MIN_WIDTH_PCT)
+                .coerceIn(CONTACT_BAR_MIN_WIDTH_MIN, CONTACT_BAR_MIN_WIDTH_MAX),
             pins = sp.getString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, "").orEmpty(),
         )
     }

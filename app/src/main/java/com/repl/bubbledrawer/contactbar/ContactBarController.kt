@@ -66,6 +66,10 @@ class ContactBarController(
     private var hideReason: String? = null
     private var fastUntil = 0L
     private var capacityShown = 0
+    private var cornerShown = Float.NaN
+
+    /** While set, the bar stays hidden: the window is closing, so it must not ride the animation. */
+    private var closingUntil = 0L
 
     @Volatile
     private var task: Any? = null
@@ -102,6 +106,7 @@ class ContactBarController(
             task = taskInfo
             currentPkg = null
             hideReason = null
+            closingUntil = 0L
             log(
                 Log.INFO,
                 "CONTACT_BAR_TASK_APPEARED pkg=${FreeformTask.packageName(taskInfo)} " +
@@ -109,6 +114,19 @@ class ContactBarController(
             )
         }
         scheduleFrame()
+    }
+
+    /**
+     * The window is going away (swipe-up dismiss / ✕ / maximize): remove the bar now and stay hidden
+     * until either the task is gone or [CLOSE_LATCH_MS] passes — the latter so an aborted transition
+     * cannot leave the bar permanently hidden.
+     */
+    override fun onFreeformTaskClosing(taskId: Int) {
+        val current = task ?: return
+        if (FreeformTask.taskId(current) != taskId) return
+        log(Log.INFO, "CONTACT_BAR_TASK_CLOSING taskId=$taskId")
+        closingUntil = SystemClock.uptimeMillis() + CLOSE_LATCH_MS
+        detach("CLOSING")
     }
 
     /**
@@ -177,6 +195,18 @@ class ContactBarController(
         if (animating) fastUntil = now + FAST_WINDOW_MS
         if (!animating && now > fastUntil && frames % IDLE_FRAME_STRIDE != 0) return
 
+        // Closing: hide immediately and stay hidden while the window animates away (the user's
+        // "关闭小窗动画期间不要跟随" rule). Two sources: the exit hook and the task's own EXITING state.
+        if (now < closingUntil) {
+            detach("CLOSING")
+            return
+        }
+        if (FreeformTask.isExiting(info)) {
+            closingUntil = now + CLOSE_LATCH_MS
+            detach("EXITING")
+            return
+        }
+
         // Mode gate: this is the user's "迷你小窗不应显示" rule and it also covers the pinned
         // states, where the window is half off-screen.
         if (!FreeformTask.isNormal(info)) {
@@ -192,6 +222,18 @@ class ContactBarController(
         if (bounds == null || bounds.width() <= 0 || bounds.height() <= 0) {
             detach("NO_BOUNDS")
             return
+        }
+
+        // Size gate: a window dragged down to a thumbnail has no room for a name row (user setting,
+        // 0 disables it). Expressed against the screen width, which is what the slider shows.
+        val minPct = minWidthPct()
+        if (minPct > 0) {
+            val screenWidth = wm.currentWindowMetrics.bounds.width()
+            if (bounds.width() * 100 < minPct * screenWidth) {
+                // Stable reason so a drag through the threshold logs once, not per percentage point.
+                detach("TOO_SMALL")
+                return
+            }
         }
 
         // The window's package can change inside the same task (小窗切换到另一个会话/应用).
@@ -210,9 +252,9 @@ class ContactBarController(
 
         val rect = layoutFor(bounds)
         if (!added) {
-            attach(rect)
+            attach(info, rect)
         } else if (rect != lastRect) {
-            update(rect)
+            update(info, rect)
         }
         lastRect = rect
         logGeometry(info, bounds, rect)
@@ -241,17 +283,21 @@ class ContactBarController(
         return Rect(x, y, x + width, y + barHeight())
     }
 
-    private fun barHeight(): Int = dp(BAR_HEIGHT_DP)
+    private fun barHeight(): Int = ensureView().barHeightPx()
+
+    private fun ensureView(): ContactBarView = view ?: ContactBarView(host).also {
+        // 6dp vertical padding keeps the 36dp avatar + name row inside the 63dp bar.
+        it.setPaddingDp(10, 6)
+        view = it
+    }
 
     // ---------------------------------------------------------------- window plumbing
 
-    private fun attach(rect: Rect) {
-        val v = view ?: ContactBarView(host).also {
-            it.setPaddingDp(10, 8)
-            view = it
-        }
+    private fun attach(info: Any, rect: Rect) {
+        val v = ensureView()
         capacityShown = v.capacityFor(rect.width())
-        v.bind(items, capacityShown, fallbackIcon(), ::openConversation)
+        applyCorner(v, info)
+        v.bind(items, capacityShown, fallbackIcon(), ::openConversation, ::onRemoveConversation)
         runCatching {
             wm.addView(v, params(rect))
             added = true
@@ -264,16 +310,28 @@ class ContactBarController(
         }
     }
 
-    private fun update(rect: Rect) {
+    private fun update(info: Any, rect: Rect) {
         val v = view ?: return
         runCatching { wm.updateViewLayout(v, params(rect)) }
             .onFailure { logger(Log.WARN, "CONTACT_BAR_UPDATE_FAILED", it) }
+        applyCorner(v, info)
         // A wider window fits more avatars — re-bind so a resize changes the visible set too.
         val capacity = v.capacityFor(rect.width())
         if (capacity != capacityShown) {
             capacityShown = capacity
-            v.bind(items, capacity, fallbackIcon(), ::openConversation)
+            v.bind(items, capacity, fallbackIcon(), ::openConversation, ::onRemoveConversation)
         }
+    }
+
+    /**
+     * Corner radius of the window itself (`MiuiFreeformModeTaskInfo.getCornerRadius()`, screen px), so
+     * the bar's corners match the 小窗 instead of looking like a pill. 13dp when the ROM stays silent.
+     */
+    private fun applyCorner(view: ContactBarView, info: Any) {
+        val radius = FreeformTask.cornerRadius(info) ?: return
+        if (radius == cornerShown) return
+        cornerShown = radius
+        view.setCornerRadius(radius)
     }
 
     /**
@@ -336,12 +394,32 @@ class ContactBarController(
         items = list
         val v = view ?: return
         val rect = lastRect ?: return
-        v.bind(items, v.capacityFor(rect.width()), fallbackIcon(), ::openConversation)
+        v.bind(items, v.capacityFor(rect.width()), fallbackIcon(), ::openConversation, ::onRemoveConversation)
         log(
             Log.INFO,
             "CONTACT_BAR_DATA pkg=$pkg items=${items.size} live=${recent.lastLiveCount} " +
                 "remembered=${(items.size - recent.lastLiveCount).coerceAtLeast(0)}",
         )
+    }
+
+    /**
+     * Swipe-to-remove (Flyme: `ContactListView.C2929d.onSwiped` → `C2831I.m9363I`). The conversation is
+     * dropped from the memory and suppressed until something newer arrives for that chat — and the bar
+     * disappears when that was the last one.
+     */
+    private fun onRemoveConversation(conversation: Conversation) {
+        recent.forget(conversation)
+        val info = task
+        val pkg = info?.let { FreeformTask.packageName(it) }
+        items = if (pkg != null) recent.conversations(pkg, force = true) else emptyList()
+        if (items.isEmpty()) {
+            detach("EMPTY_AFTER_REMOVE")
+            return
+        }
+        val v = view ?: return
+        val rect = lastRect ?: return
+        capacityShown = v.capacityFor(rect.width())
+        v.bind(items, capacityShown, fallbackIcon(), ::openConversation, ::onRemoveConversation)
     }
 
     /** Flyme falls back to the app icon when a notification carries no avatar. */
@@ -428,6 +506,9 @@ class ContactBarController(
 
     private fun enabled(): Boolean = runCatching { RemotePrefs.read(prefs).contactBar }.getOrDefault(false)
 
+    /** Hide-threshold in percent of the screen width; 0 disables the size gate entirely. */
+    private fun minWidthPct(): Int = runCatching { RemotePrefs.read(prefs).contactBarMinWidthPct }.getOrDefault(0)
+
     private fun logGeometry(info: Any, bounds: Rect, rect: Rect) {
         val now = SystemClock.uptimeMillis()
         if (now - lastLogAt < GEOMETRY_LOG_MS) return
@@ -454,7 +535,13 @@ class ContactBarController(
     private companion object {
         /** Gap between the window's bottom edge and the bar (Flyme: 10dp margin, 63dp bar). */
         const val GAP_DP = 6
-        const val BAR_HEIGHT_DP = 62
+
+        /**
+         * How long the bar stays hidden after the close gesture commits. The task only vanishes when
+         * the closing animation finishes; the latch covers the gap, and expiring it means an aborted
+         * transition cannot leave the bar hidden forever.
+         */
+        const val CLOSE_LATCH_MS = 1200L
 
         /** Notification data is re-read at most this often; callbacks refresh immediately. */
         const val DATA_EVERY_FRAMES = 40

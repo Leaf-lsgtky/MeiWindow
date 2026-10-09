@@ -612,18 +612,33 @@ fun ExperimentalSettingsScreen(
             }
             groupedCardItems(
                 keyPrefix = "exp-contact-bar",
-                items = listOf(
-                    CardItem("contact-bar") {
+                items = buildList {
+                    add(CardItem("contact-bar") {
                         SwitchRow(
                             title = stringResource(R.string.exp_contact_bar),
                             checked = snap.contactBar,
                             onCheckedChange = actions::setContactBar,
                         )
-                    },
-                    CardItem("contact-bar-hint") {
+                    })
+                    if (snap.contactBar) {
+                        add(CardItem("contact-bar-min-width") {
+                            IntSliderRow(
+                                title = stringResource(R.string.exp_contact_bar_min_width),
+                                value = snap.contactBarMinWidthPct,
+                                min = RemotePrefs.CONTACT_BAR_MIN_WIDTH_MIN,
+                                max = RemotePrefs.CONTACT_BAR_MIN_WIDTH_MAX,
+                                valueText = {
+                                    if (it == 0) stringResource(R.string.exp_contact_bar_min_width_off)
+                                    else stringResource(R.string.pct_value, it)
+                                },
+                                onCommit = actions::setContactBarMinWidthPct,
+                            )
+                        })
+                    }
+                    add(CardItem("contact-bar-hint") {
                         SliderHintRow(stringResource(R.string.exp_contact_bar_summary))
-                    },
-                ),
+                    })
+                },
             )
 
             // --- 小白条手势交互 ---

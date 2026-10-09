@@ -19,6 +19,8 @@ data class Conversation(
     val icon: Drawable?,
     val pendingIntent: PendingIntent?,
     val postTime: Long,
+    /** Notification still posted → the bar shows the unread dot (Flyme's `NewMessageView`). */
+    val live: Boolean = false,
 )
 
 /**
@@ -83,6 +85,15 @@ class RecentConversations(
 
     private val remembered = HashMap<String, Remembered>()
 
+    /**
+     * Conversations the user swiped away, with the post time they were removed at. A newer
+     * notification (greater `postTime` — the framework refreshes it on every post *and* update) brings
+     * the chat back, which is what "remove from the bar" should mean; [FORGET_TTL_MS] is the backstop.
+     */
+    private class Forgotten(val postTime: Long, val at: Long)
+
+    private val forgotten = HashMap<String, Forgotten>()
+
     /** Live notifications seen in the last build — diagnostics only. */
     @Volatile
     var lastLiveCount = 0
@@ -114,13 +125,37 @@ class RecentConversations(
             // Remember every whitelisted app, not just the one in the small window: by the time a
             // window opens, HyperOS has usually cleared that app's notifications already.
             remember(conv, now)
+            if (conv.pkg != pkg || isForgotten(conv)) continue
             // One avatar per conversation: a chat that re-posts (or a summary line) keeps the
             // newest notification only — Flyme keeps a per-key bucket with the same effect.
-            if (conv.pkg == pkg) live[conv.title] = conv
+            live[conv.title] = conv.copy(live = true)
         }
         lastLiveCount = live.size
         prune(now)
         return merge(pkg, live)
+    }
+
+    /**
+     * Drop one conversation from the bar (Flyme's swipe-to-remove, `ContactListView.C2929d.onSwiped` →
+     * `C2831I.m9363I` → the store's remove). The notification itself is left alone; the chat returns
+     * once something newer arrives for it.
+     */
+    fun forget(conversation: Conversation) {
+        val entry = key(conversation.pkg, conversation.title)
+        remembered.remove(entry)
+        forgotten[entry] = Forgotten(conversation.postTime, android.os.SystemClock.elapsedRealtime())
+        cachedPkg = null
+        log(Log.INFO, "CONTACT_BAR_FORGET pkg=${conversation.pkg} title=${conversation.title}", null)
+    }
+
+    private fun isForgotten(conv: Conversation): Boolean {
+        val entry = forgotten[key(conv.pkg, conv.title)] ?: return false
+        // A newer notification means the chat has something to say again.
+        if (conv.postTime > entry.postTime) {
+            forgotten.remove(key(conv.pkg, conv.title))
+            return false
+        }
+        return true
     }
 
     /**
@@ -139,6 +174,7 @@ class RecentConversations(
     }
 
     private fun remember(conv: Conversation, now: Long) {
+        if (isForgotten(conv)) return
         val record = remembered.getOrPut(key(conv.pkg, conv.title)) {
             Remembered(conv.pkg, conv.title, null, null, null, 0L, now)
         }
@@ -171,6 +207,7 @@ class RecentConversations(
     /** Drop conversations nobody refreshed for [TTL_MS], then enforce the per-app and global caps. */
     private fun prune(now: Long) {
         remembered.values.removeAll { now - it.lastSeenAt > TTL_MS }
+        forgotten.entries.removeAll { now - it.value.at > FORGET_TTL_MS }
         remembered.values.groupBy { it.pkg }.forEach { (_, list) ->
             if (list.size > MAX_REMEMBERED_PER_APP) {
                 list.sortedByDescending { it.lastSeenAt }
@@ -261,9 +298,14 @@ class RecentConversations(
          */
         private const val TTL_MS = 12 * 60 * 60 * 1000L
 
+        /** How long a swiped-away conversation stays away even if no new notification arrives. */
+        private const val FORGET_TTL_MS = 60 * 60 * 1000L
+
         /** Memory bounds: the bar shows at most 6 avatars, so 12 per app / 60 overall is plenty. */
         private const val MAX_REMEMBERED_PER_APP = 12
         private const val MAX_REMEMBERED_TOTAL = 60
+
+        private const val PROXY_NAME = "BubbleDrawerNotificationListener"
 
         /** Flyme's own whitelist (`common/windowmode/model/AbstractC2304a.java:49-53`). */
         val IM_WHITELIST = setOf(
@@ -366,16 +408,28 @@ class RecentConversations(
                 val add = instance.javaClass.methods.firstOrNull {
                     it.name == "addCollectionListener" && it.parameterCount == 1
                 } ?: return
-                val proxy = Proxy.newProxyInstance(listenerClass.classLoader, arrayOf(listenerClass)) { _, method, args ->
-                    if (method.name.startsWith("onEntry")) {
-                        onChanged?.invoke()
-                        // Diagnostics for the HyperOS behaviour this class exists to survive: when the
-                        // app is opened its notifications are cancelled, so an `onEntryRemoved` burst
-                        // right before the small window appears is expected — the memory keeps the bar
-                        // populated (see the class KDoc).
-                        if (method.name == "onEntryRemoved") logRemoval(args?.firstOrNull())
+                // A java.lang.reflect.Proxy must answer equals/hashCode itself: the default handler
+                // returning null makes `Intrinsics.areEqual` unbox null into a boolean and crash the
+                // SystemUI process (`NamedListenerSet.remove` compares every registered listener,
+                // which runs on unrelated paths such as ModalControllerImpl.exitModal when the
+                // keyguard is shown). Identity semantics are the correct answer here anyway.
+                val proxy = Proxy.newProxyInstance(listenerClass.classLoader, arrayOf(listenerClass)) { instance, method, args ->
+                    when (method.name) {
+                        "equals" -> instance === args?.firstOrNull()
+                        "hashCode" -> System.identityHashCode(instance)
+                        "toString" -> PROXY_NAME
+                        else -> {
+                            if (method.name.startsWith("onEntry")) {
+                                onChanged?.invoke()
+                                // Diagnostics for the HyperOS behaviour this class exists to survive:
+                                // when the app is opened its notifications are cancelled, so an
+                                // `onEntryRemoved` burst right before the small window appears is
+                                // expected — the memory keeps the bar populated (see the class KDoc).
+                                if (method.name == "onEntryRemoved") logRemoval(args?.firstOrNull())
+                            }
+                            null
+                        }
                     }
-                    null
                 }
                 add.invoke(instance, proxy)
                 listenerAttached = true
