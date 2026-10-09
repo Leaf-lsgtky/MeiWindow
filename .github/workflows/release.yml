@@ -96,6 +96,12 @@ jobs:
           if [ -z "$(tr -d '[:space:]' < notes.md)" ]; then
             git log --no-merges --pretty='- %s' -n 10 "$tag" > notes.md
           fi
-          gh release create "$tag" dist/*.apk \
-            --title "魅窗 $tag" \
-            --notes-file notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists, updating assets and notes..."
+            gh release upload "$tag" dist/*.apk --clobber
+            gh release edit "$tag" --title "魅窗 $tag" --notes-file notes.md
+          else
+            gh release create "$tag" dist/*.apk \
+              --title "魅窗 $tag" \
+              --notes-file notes.md
+          fi
