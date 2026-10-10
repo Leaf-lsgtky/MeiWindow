@@ -4,6 +4,11 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Looper
 import android.service.notification.StatusBarNotification
@@ -11,6 +16,9 @@ import android.util.Log
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import java.lang.reflect.Proxy
+
+/** 联系人头像的落地尺寸：小窗里是 36dp，520dpi 下 ≈117px，留足余量。 */
+private const val AVATAR_PX = 144
 
 /** One recent conversation, rebuilt from a posted notification (Flyme's `C0653b` analogue). */
 data class Conversation(
@@ -260,11 +268,12 @@ class RecentConversations(
         val pi = n.contentIntent ?: return null
 
         if (!cachedIcons.containsKey(key)) {
-            cachedIcons[key] = runCatching { n.getLargeIcon()?.loadDrawable(context) }.getOrNull()
+            val raw = runCatching { n.getLargeIcon()?.loadDrawable(context) }.getOrNull()
                 ?: runCatching {
                     val extra = n.extras?.get(Notification.EXTRA_LARGE_ICON)
                     (extra as? android.graphics.drawable.Icon)?.loadDrawable(context)
                 }.getOrNull()
+            cachedIcons[key] = ownAvatar(raw)
         }
         return Conversation(
             pkg = pkg,
@@ -283,9 +292,49 @@ class RecentConversations(
         )
     }
 
+    /**
+     * The avatar we keep: a copy in a bitmap of our own.
+     *
+     * `Icon.loadDrawable()` answers with a `BitmapDrawable` that wraps the notification's bitmap **by
+     * reference**, and this class keeps conversations (avatar included) for up to [TTL_MS]. A bitmap
+     * owned by the notification pipeline / an icon cache can be recycled by whoever owns it — HyperOS
+     * does exactly that in its media stack (`Canvas: trying to use a recycled bitmap` inside
+     * `BitmapDrawable.draw`) — and drawing a foreign bitmap through a `BitmapShader` (what
+     * `CircleImageView` does) is just as fatal in our bar. Drawing it once into a small bitmap of ours
+     * removes the whole class of failure, and it also shrinks what we retain: a聊天头像是 512×512,
+     * our copy is [AVATAR_PX]².
+     */
+    private fun ownAvatar(source: Drawable?): Drawable? {
+        source ?: return null
+        // Already dead when handed to us: nothing to copy, and the view must not see it.
+        if (source is BitmapDrawable && source.bitmap.isRecycled) return null
+        return runCatching {
+            val bitmap = Bitmap.createBitmap(AVATAR_PX, AVATAR_PX, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            val src = source as? BitmapDrawable
+            if (src != null) {
+                // Center-crop like the `CircleImageView` would have (CENTER_CROP of a non-square
+                // avatar must not turn into a stretch).
+                val bmp = src.bitmap
+                val side = minOf(bmp.width, bmp.height)
+                val left = (bmp.width - side) / 2
+                val top = (bmp.height - side) / 2
+                canvas.drawBitmap(
+                    bmp,
+                    Rect(left, top, left + side, top + side),
+                    Rect(0, 0, AVATAR_PX, AVATAR_PX),
+                    Paint(Paint.FILTER_BITMAP_FLAG),
+                )
+            } else {
+                source.setBounds(0, 0, AVATAR_PX, AVATAR_PX)
+                source.draw(canvas)
+            }
+            BitmapDrawable(context.resources, bitmap)
+        }.getOrElse { source }
+    }
+
     /** The notification's user, for `startActivityAsUser` (reflection: `getUserId`/`getUser` are hidden). */
-    private fun notificationUserId(sbn: StatusBarNotification): Int {
-        runCatching {
+    private fun notificationUserId(sbn: StatusBarNotification): Int {        runCatching {
             (sbn.javaClass.getMethod("getUserId").invoke(sbn) as? Number)?.let { return it.toInt() }
         }
         runCatching {

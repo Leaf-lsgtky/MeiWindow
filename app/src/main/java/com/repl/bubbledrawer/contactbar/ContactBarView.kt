@@ -3,6 +3,7 @@ package com.repl.bubbledrawer.contactbar
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
@@ -116,7 +117,7 @@ class ContactBarView(context: Context) : FrameLayout(context) {
         val name = item.findViewById<TextView>(NAME_ID)
         val dot = item.findViewById<View>(DOT_ID)
 
-        avatar.setImageDrawable(conversation.icon ?: fallback)
+        avatar.setImageDrawable(conversation.icon?.takeIf { it.usable() } ?: fallback)
         name.text = conversation.title
         name.setTextColor(nameColor())
         // Flyme hides the red dot once the notification behind the row is gone; our memory keeps the
@@ -199,6 +200,15 @@ class ContactBarView(context: Context) : FrameLayout(context) {
     }
 
     private fun itemName(item: View): TextView? = item.findViewById(NAME_ID)
+
+    /**
+     * A `BitmapDrawable` whose bitmap has been recycled must never reach the view: drawing it throws
+     * `Canvas: trying to use a recycled bitmap` (that is a real HyperOS fault — it happens inside
+     * `BitmapDrawable.draw` when a crossfade keeps drawing artwork the ROM recycled). Our avatars are
+     * copies we own (see [RecentConversations.ownAvatar]), this is the belt-and-braces check for the
+     * fallback icon and for anything an icon cache hands us.
+     */
+    private fun Drawable.usable(): Boolean = !(this is BitmapDrawable && bitmap.isRecycled)
 
     private fun newItem(): View {
         val column = LinearLayout(context).apply {

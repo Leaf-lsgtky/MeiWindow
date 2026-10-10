@@ -137,7 +137,22 @@ class SlideIconView @JvmOverloads constructor(
     }
 
     private fun toBitmap(drawable: Drawable): Bitmap? {
-        (drawable as? BitmapDrawable)?.bitmap?.let { if (!it.isRecycled) return it }
+        // A `BitmapDrawable` is copied 1:1 instead of referenced: app icons come from the ROM's icon
+        // cache (`AppRepository`), and HyperOS does recycle icon/artwork bitmaps on its own schedule —
+        // drawing one of those throws `Canvas: trying to use a recycled bitmap`. The copy keeps the
+        // pixels (and the aspect ratio the shader center-crops later) in a bitmap this view owns.
+        (drawable as? BitmapDrawable)?.bitmap?.let { source ->
+            if (source.isRecycled) return null
+            return runCatching {
+                val copy = Bitmap.createBitmap(
+                    source.width,
+                    source.height,
+                    source.config ?: Bitmap.Config.ARGB_8888,
+                )
+                Canvas(copy).drawBitmap(source, 0f, 0f, null)
+                copy
+            }.getOrNull()
+        }
         var w = drawable.intrinsicWidth
         var h = drawable.intrinsicHeight
         if (w <= 0) w = width
