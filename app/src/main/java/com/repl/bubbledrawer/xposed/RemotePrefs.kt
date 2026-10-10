@@ -165,9 +165,10 @@ object RemotePrefs {
      * 禁止小窗偏移：已经有小窗时，新开的小窗不再为了避开它而挪位。
      *
      * HyperOS 会给第二个小窗加一个「错开」偏移（`MiuiMultiWindowUtils.avoidIfNeeded`：X +78dp、
-     * Y +44dp，正好是往右下偏一点），Flyme 的小窗每次都开在同一个默认位置，所以默认打开本开关。
+     * Y +44dp，正好是往右下偏一点），Flyme 的小窗每次都开在同一个默认位置。
+     * 默认关闭：不动系统原有摆放，想要 Flyme 那样"每次都开在同一处"再手动打开。
      */
-    const val DEFAULT_FLYME_FREEFORM_NO_OFFSET = true
+    const val DEFAULT_FLYME_FREEFORM_NO_OFFSET = false
     const val DEFAULT_FLYME_FREEFORM_SCALE = 80
     const val FLYME_FREEFORM_SCALE_MIN = 60
     const val FLYME_FREEFORM_SCALE_MAX = 95

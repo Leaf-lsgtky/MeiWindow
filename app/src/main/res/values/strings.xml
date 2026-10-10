@@ -93,7 +93,7 @@
     <string name="exp_center_window">小窗居中显示</string>
     <string name="exp_center_window_summary">修正 HyperOS 原版小窗偏上的问题，将小窗垂直居中置于屏幕中央</string>
     <string name="exp_no_offset">禁止小窗偏移</string>
-    <string name="exp_no_offset_summary">已经有小窗时，新开的小窗仍然开在同一个默认位置。HyperOS 默认会给第二个小窗加一个避让偏移（右移 78dp、下移 44dp，看起来是往右下挪了一点），Flyme 则每次都开在同一处；关掉即恢复系统原样</string>
+    <string name="exp_no_offset_summary">打开后，已经有小窗时新开的小窗仍落在同一个默认位置（Flyme 的做法）。HyperOS 默认会给第二个小窗加一个避让偏移（右移 78dp、下移 44dp，看起来是往右下挪了一点），保持关闭即维持系统原样</string>
     <string name="exp_window_scale">小窗缩放比例</string>
     <string name="exp_window_scale_hint" formatted="false">对齐 Flyme 视觉，默认 80% 视觉宽度（HyperOS 原版约 67%）</string>
     <string name="exp_dim_background">背景暗化遮罩</string>

@@ -199,11 +199,11 @@ HyperOS 的「错开」在 `MiuiMultiWindowUtils.avoidIfNeeded:1807`（手机走
 `avoidAsPossible(Rect, Rect, Rect)` 上（启动 `getFreeformRect:1461` / `getCustomFreeformRect:1541`、
 全屏→小窗 `MulWinSwitchInteractUtil:104`、迷你→普通恢复 `MiuiFreeformModeMiniStateHandler:276`
 与 `MiuiFreeformModePinHandler:953`），所以关掉它一处即可。
-入口：实验性功能 → 窗口尺寸与位置 → **禁止小窗偏移**（默认开）。
-- [ ] 开一个小窗 → 再开第二个（不同应用）→ 两个窗口**位置完全重合**，没有右下偏移
+入口：实验性功能 → 窗口尺寸与位置 → **禁止小窗偏移**（**默认关**，需手动打开；关闭时保持系统原有摆放）。
+- [ ] **打开开关**：开一个小窗 → 再开第二个（不同应用）→ 两个窗口**位置完全重合**，没有右下偏移
       （日志 `FREEFORM_OFFSET_SKIPPED mobile=… other=…`；`mobile` 应与 `other` 基本一致）
-- [ ] 关掉本开关再重复 → 第二个小窗回到 HyperOS 原样：相对第一个右移 78dp、下移 44dp
-- [ ] 关掉「小窗居中显示」后重复第一项 → 两个小窗仍落在**同一个默认位置**（这条是关键：
+- [ ] **保持关闭**（默认）：第二个小窗是 HyperOS 原样 —— 相对第一个右移 78dp、下移 44dp
+- [ ] 打开开关后再关掉「小窗居中显示」重复第一项 → 两个小窗仍落在**同一个默认位置**（这条是关键：
       居中关闭时不再有模块覆盖位置，全靠本开关压住 ROM 的避让）
 - [ ] 迷你小窗恢复成普通小窗时不因另一个小窗而偏移（同上判据）
 - [ ] 迷你小窗自己的排布（同侧迷你自动排队）、贴边/侧边栏避让不受影响
