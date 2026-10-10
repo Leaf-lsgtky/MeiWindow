@@ -797,6 +797,11 @@ class FlymeFreeformController(
          * controller is created, cleared on dispose/hot reload.
          */
         @Volatile var freeformObserver: com.repl.bubbledrawer.contactbar.FreeformObserver? = null
+
+        /** Captured `MiuiFreeformModeDisplayInfo` + its IME state (see [hookImeState]). */
+        @Volatile private var imeDisplayInfo: Any? = null
+        @Volatile private var imeShowing = false
+        @Volatile private var imeHeight = 0
         @Volatile var currentModule: XposedModule? = null
         @Volatile var savedController: Any? = null
         @Volatile var savedExecutor: Executor? = null
@@ -895,8 +900,104 @@ class FlymeFreeformController(
             hookBottomCaptionGestures(module, prefs, classLoader)
             hookResizeFocus(module, classLoader)
             hookTaskExit(module, classLoader)
+            hookImeState(module, classLoader)
             hookGestureAnimation(module, classLoader)
         }
+
+        /**
+         * IME visibility as the ROM itself sees it: `MiuiFreeformModeDisplayInfo.setImeVisibility(
+         * showing, height)` is what MIUI's own freeform code reads to keep windows out of the
+         * keyboard's way (`isImeShowing()` / `getImeHeight()` are used all over
+         * `MiuiFreeformModeResizeHandler`).
+         *
+         * Flyme is no help here — its contact bar records the IME flag and never reads it
+         * (`C2831I.f10206B` is only ever assigned), so its bar just rides whatever the window does.
+         * On HyperOS the window does not always move out of the way, so the bar has to avoid the
+         * keyboard itself; this is the authoritative signal for that.
+         */
+        private fun hookImeState(
+            module: XposedModule,
+            classLoader: ClassLoader,
+        ) {
+            val cls = runCatching {
+                classLoader.loadClass("com.android.wm.shell.multitasking.miuifreeform.MiuiFreeformModeDisplayInfo")
+            }.getOrNull() ?: return
+
+            cls.declaredConstructors.forEach { ctor ->
+                runCatching {
+                    module.hook(ctor)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .setId("bubbledrawer.freeform.ime.ctor")
+                        .intercept { chain ->
+                            val result = chain.proceed()
+                            chain.thisObject?.let { displayInfo ->
+                                imeDisplayInfo = displayInfo
+                                refreshImeState(displayInfo)
+                            }
+                            result
+                        }
+                }
+            }
+
+            cls.declaredMethods.filter { it.name == "setImeVisibility" && it.parameterCount == 2 }.forEach { m ->
+                runCatching {
+                    module.hook(m)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .setId("bubbledrawer.freeform.ime.set")
+                        .intercept { chain ->
+                            val result = chain.proceed()
+                            imeDisplayInfo = chain.thisObject
+                            imeShowing = (chain.args[0] as? Boolean) ?: false
+                            imeHeight = (chain.args[1] as? Number)?.toInt() ?: 0
+                            log("IME_VISIBILITY showing=$imeShowing height=$imeHeight")
+                            result
+                        }
+                }
+            }
+            log("HOOK_INSTALLED_MiuiFreeformModeDisplayInfo.setImeVisibility")
+        }
+
+        /** Re-read the state from the captured instance (covers "IME was already up at load time"). */
+        private fun refreshImeState(displayInfo: Any) {
+            runCatching {
+                imeShowing = displayInfo.javaClass.getMethod("isImeShowing").invoke(displayInfo) as? Boolean ?: false
+                imeHeight = (displayInfo.javaClass.getMethod("getImeHeight").invoke(displayInfo) as? Number)?.toInt() ?: 0
+            }
+        }
+
+        /** Is the keyboard up right now (px height from [imeHeightPx])? */
+        fun isImeShowing(): Boolean {
+            imeDisplayInfo?.let {
+                refreshImeState(it)
+                return imeShowing
+            }
+            // The WMShell hook is the primary signal; if it never fired (class renamed by a future
+            // ROM) fall back to asking the input-method service directly. Rate-limited: this is IPC.
+            return pollImeFallback()
+        }
+
+        fun imeHeightPx(): Int = imeHeight
+
+        @Volatile private var imePollAt = 0L
+        @Volatile private var imePollHeight = 0
+
+        /** `InputMethodManager.getInputMethodWindowVisibleHeight()` (hidden), cached [IME_POLL_MS]. */
+        private fun pollImeFallback(): Boolean {
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - imePollAt < IME_POLL_MS) return imePollHeight > 0
+            imePollAt = now
+            imePollHeight = runCatching {
+                val imm = savedContext?.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                    as? android.view.inputmethod.InputMethodManager ?: return@runCatching 0
+                android.view.inputmethod.InputMethodManager::class.java
+                    .getMethod("getInputMethodWindowVisibleHeight")
+                    .invoke(imm) as? Int ?: 0
+            }.getOrDefault(0)
+            if (imePollHeight > 0) imeHeight = imePollHeight
+            return imePollHeight > 0
+        }
+
+        private const val IME_POLL_MS = 300L
 
         /**
          * "This window is going away" — `MiuiFreeformModeController.exitFreeformTask(int, …)` is the

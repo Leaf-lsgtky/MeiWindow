@@ -14,6 +14,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
+import com.repl.bubbledrawer.launch.FlymeFreeformController
 import com.repl.bubbledrawer.launch.MiuiFreeform
 import com.repl.bubbledrawer.xposed.CornerInputMonitor
 import com.repl.bubbledrawer.xposed.RemotePrefs
@@ -279,6 +280,11 @@ class ContactBarController(
         }
 
         val rect = layoutFor(bounds)
+        if (rect == null) {
+            // No room that avoids the keyboard — the window already fills what is left above it.
+            detach("IME_NO_ROOM")
+            return
+        }
         if (!added) {
             attach(info, rect)
         } else if (rect != lastRect) {
@@ -288,27 +294,49 @@ class ContactBarController(
         logGeometry(info, bounds, rect)
     }
 
-    /** Window rect for the bar: same width as the small window, hugging its bottom edge. */
-    private fun layoutFor(bounds: Rect): Rect {
+    /**
+     * Window rect for the bar: same width as the small window, hugging its bottom edge — and never
+     * over the keyboard.
+     *
+     * The IME is why this returns null: Flyme's bar records the keyboard state and ignores it
+     * (`C2831I.f10206B` is write-only), because there the ROM moves the window out of the way. On
+     * HyperOS the window can stay put, so when the space under the window is inside the keyboard the
+     * bar moves above the *window* instead; if even that would sit behind the keyboard, it stays
+     * hidden rather than covering the keys. Returns null in that case.
+     */
+    private fun layoutFor(bounds: Rect): Rect? {
         val metrics = wm.currentWindowMetrics
         val screenH = metrics.bounds.height()
         val screenW = metrics.bounds.width()
-        val navBottom = runCatching {
-            metrics.windowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars()).bottom
-        }.getOrDefault(0)
+        val systemBars = runCatching {
+            metrics.windowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars())
+        }.getOrDefault(android.graphics.Insets.NONE)
+        val navBottom = systemBars.bottom
+        val statusTop = systemBars.top
+
+        // Keyboard top edge: everything below it must stay clear.
+        val imeTop = if (FlymeFreeformController.isImeShowing()) {
+            (screenH - FlymeFreeformController.imeHeightPx()).coerceAtLeast(statusTop)
+        } else {
+            0
+        }
+        val limitBottom = if (imeTop > 0) minOf(screenH - navBottom, imeTop) else screenH - navBottom
 
         val width = bounds.width().coerceAtLeast(dp(90))
         var x = bounds.left
         if (x + width > screenW) x = screenW - width
         if (x < 0) x = 0
 
-        var y = bounds.bottom + dp(GAP_DP)
-        // Touching the bottom edge / gesture area: flip above the window instead of clipping.
-        if (y + barHeight() > screenH - navBottom) {
-            val above = bounds.top - barHeight() - dp(GAP_DP)
-            if (above > navBottom) y = above
+        val height = barHeight()
+        val gap = dp(GAP_DP)
+        val below = bounds.bottom + gap
+        val above = bounds.top - height - gap
+        val y = when {
+            below + height <= limitBottom -> below
+            above >= statusTop && above + height <= limitBottom -> above
+            else -> return null
         }
-        return Rect(x, y, x + width, y + barHeight())
+        return Rect(x, y, x + width, y + height)
     }
 
     private fun barHeight(): Int = ensureView().barHeightPx()
@@ -458,57 +486,114 @@ class ContactBarController(
     // ---------------------------------------------------------------- tap → conversation
 
     /**
-     * Open the tapped conversation **inside the existing small window** — the port of Flyme's
-     * `C2831I.mo9405g` (`contentIntent` + `start_windowmode=true` bundle, `m9407t()`).
+     * Open the tapped conversation **inside the existing small window** — Flyme's
+     * `C2831I.mo9405g` verbatim:
      *
-     * HyperOS spelling of the same thing: MIUI freeform `ActivityOptions` + `setLaunchTaskId` of the
-     * window we are attached to, handed to `PendingIntent.send(…, options)`. That is the documented
-     * reuse path (`MiuiCaptionClickListener.handleNewWindowClicked:239-243`); without the task id the
-     * chat would open as a second window with the wrong shape (see [MiuiFreeform.reusableTaskId]).
+     * ```java
+     * Intent intent = c0653b.m3435c();          // the Intent behind the click, kept in the model
+     * Bundle bundle = m9407t();                 // ActivityOptions.makeBasic().toBundle()
+     * bundle.putBoolean("start_windowmode", true);
+     * if (!m9364J(pi, intent, bundle))          // pi.send(ctx, 0, intent, null, null, null, bundle)
+     *     AbstractC7062g.m24760j(ctx, intent, user);  // startActivityAsUser(intent, bundle, user)
+     * ```
+     *
+     * Two details matter on HyperOS, and both were missing before:
+     *  - the **Intent** is sent along (fill-in) and, more importantly, is kept as the fallback: opening
+     *    an app cancels its notifications and WeChat cancels their PendingIntents with them, so
+     *    `send()` starts throwing `CanceledException` for chats whose notification is gone — the Intent
+     *    still starts fine. Without it the tap degraded to "open WeChat's main UI", which is the
+     *    "sometimes it works, sometimes it doesn't" report.
+     *  - the fallback keeps the **freeform options** (Flyme's bundle carries `start_windowmode`); a plain
+     *    `send()` would open the chat fullscreen instead of in the window.
+     *
+     * MIUI spelling of the same intent: freeform `ActivityOptions` + `setLaunchTaskId` of the window we
+     * are attached to (`MiuiCaptionClickListener.handleNewWindowClicked:239-243`).
      */
     private fun openConversation(conversation: Conversation) {
         val info = task
         val options = freeformOptions(conversation.pkg, info)
+        val bundle = options?.toBundle()
         val pi = conversation.pendingIntent
-        if (pi != null) {
-            if (options != null) {
-                val sent = runCatching {
-                    pi.send(host, 0, null, null, null, null, options.toBundle())
-                    true
-                }.getOrDefault(false)
-                if (sent) {
-                    log(
-                        Log.INFO,
-                        "CONTACT_BAR_OPEN_OPTIONS pkg=${conversation.pkg} reuseTask=${FreeformTask.taskId(info)} " +
-                            "title=${conversation.title}",
-                    )
-                    return
-                }
+        val intent = conversation.launchIntent?.let { android.content.Intent(it) }
+        val taskId = FreeformTask.taskId(info)
+
+        // 1. Flyme's primary path: the PendingIntent, with the stored Intent as fill-in + window mode.
+        if (pi != null && bundle != null) {
+            val sent = runCatching {
+                pi.send(host, 0, intent, null, null, null, bundle)
+                true
+            }.getOrDefault(false)
+            if (sent) {
+                log(Log.INFO, "CONTACT_BAR_OPEN_PI pkg=${conversation.pkg} reuseTask=$taskId title=${conversation.title}")
+                return
             }
-            val plain = runCatching { pi.send(); true }.getOrDefault(false)
-            if (plain) {
+        }
+
+        // 2. Flyme's fallback: start the Intent itself. Survives a cancelled PendingIntent and still
+        //    lands in the small window because the options/task id are kept.
+        if (intent != null) {
+            val started = startIntentAsUser(intent, bundle, conversation.userId)
+            if (started) {
                 log(
                     Log.INFO,
-                    "CONTACT_BAR_OPEN_PLAIN pkg=${conversation.pkg} title=${conversation.title}",
+                    "CONTACT_BAR_OPEN_INTENT pkg=${conversation.pkg} reuseTask=$taskId " +
+                        "cancelled=${pi != null} title=${conversation.title}",
                 )
                 return
             }
         }
-        // Remembered conversations survive MIUI's clear-on-open, and their PendingIntent may have
-        // gone stale in the meantime (WeChat re-creates them per notification). Degrade to opening
-        // the app itself in the same small window instead of doing nothing.
+
+        // 3. No stored Intent (older memory entry): plain send, at least it opens the chat.
+        val plain = runCatching { pi?.send(); true }.getOrDefault(false)
+        if (plain) {
+            log(Log.INFO, "CONTACT_BAR_OPEN_PLAIN pkg=${conversation.pkg} title=${conversation.title}")
+            return
+        }
+
         val launched = openAppInCurrentWindow(conversation.pkg, options)
         logger(
             Log.WARN,
             "CONTACT_BAR_OPEN_FALLBACK pkg=${conversation.pkg} title=${conversation.title} " +
-                "staleIntent=${pi != null} launched=$launched",
+                "intent=${intent != null} pi=${pi != null} launched=$launched",
             null,
         )
     }
 
+    /** `Context.startActivityAsUser(intent, bundle, user)` — Flyme's `AbstractC7062g.m24760j`. */
+    private fun startIntentAsUser(intent: android.content.Intent, bundle: android.os.Bundle?, userId: Int): Boolean {
+        val launchIntent = android.content.Intent(intent)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        val user = userHandle(userId)
+        if (user != null) {
+            val asUser = runCatching {
+                Context::class.java.getMethod(
+                    "startActivityAsUser",
+                    android.content.Intent::class.java,
+                    android.os.Bundle::class.java,
+                    android.os.UserHandle::class.java,
+                ).invoke(host, launchIntent, bundle, user)
+                true
+            }.getOrDefault(false)
+            if (asUser) return true
+        }
+        return runCatching {
+            if (bundle != null) host.startActivity(launchIntent, bundle) else host.startActivity(launchIntent)
+            true
+        }.getOrDefault(false)
+    }
+
+    /** `UserHandle.of(id)` is hidden; user 0 / unknown falls back to this process's own handle. */
+    private fun userHandle(userId: Int): android.os.UserHandle? {
+        if (userId <= 0) return android.os.Process.myUserHandle()
+        return runCatching {
+            android.os.UserHandle::class.java
+                .getMethod("of", Int::class.javaPrimitiveType)
+                .invoke(null, userId) as android.os.UserHandle
+        }.getOrNull() ?: android.os.Process.myUserHandle()
+    }
+
     /** MIUI freeform launch options pinned to the window we are attached to. */
-    private fun freeformOptions(pkg: String, info: Any?): ActivityOptions? {
-        val options = runCatching { MiuiFreeform.activityOptions(host, pkg, noCheck = true) }.getOrNull()
+    private fun freeformOptions(pkg: String, info: Any?): ActivityOptions? {        val options = runCatching { MiuiFreeform.activityOptions(host, pkg, noCheck = true) }.getOrNull()
             ?: runCatching { MiuiFreeform.makeActivityOptions(host, pkg) }.getOrNull()
             ?: return null
         val taskId = FreeformTask.taskId(info)

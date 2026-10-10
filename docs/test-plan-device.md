@@ -109,9 +109,15 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - [ ] **关闭小窗动画期间不再跟随**：点 ✕ / 小白条上滑关闭的**那一刻**条就消失
       （`CONTACT_BAR_TASK_CLOSING` + `CONTACT_BAR_HIDE reason=CLOSING`），不跟着收起动画走
 - [ ] 贴边（普通/迷你贴边，mode 2/3）不显示条
-- [ ] 点某个头像 → 会话在小窗内打开（日志 `CONTACT_BAR_OPEN_OPTIONS … reuseTask=<小窗taskId>`）；
-      若出现 `CONTACT_BAR_OPEN_FALLBACK`（记忆里的 PendingIntent 已失效）应记录，此时退化为
-      把该应用本体开在当前小窗里
+- [ ] 点某个头像 → 会话在小窗内打开。Flyme 的点击链逐字对齐：
+      `pi.send(ctx,0,intent,null,null,null,options)` 失败 → `startActivityAsUser(intent, options)`。
+      对应日志：`CONTACT_BAR_OPEN_PI`（首选）→ `CONTACT_BAR_OPEN_INTENT`（PI 已被微信随通知一起
+      cancel，但 Intent 仍能启动 —— 这就是"时灵时不灵"的修复点）→ `CONTACT_BAR_OPEN_PLAIN` /
+      `CONTACT_BAR_OPEN_FALLBACK`（最后兜底，退化为打开应用本体）
+- [ ] **键盘弹出时不遮挡输入法**：窗口下方放不下就让到窗口上方，两处都让不开则隐藏
+      （`CONTACT_BAR_HIDE reason=IME_NO_ROOM`），键盘收起后自动回来。信号来自
+      `MiuiFreeformModeDisplayInfo.setImeVisibility`（日志 `IME_VISIBILITY showing=… height=…`），
+      取不到时退化为每 300ms 问一次输入法服务
 - [ ] 非 IM 应用（如抖音）小窗不显示条（`CONTACT_BAR_HIDE reason=NOT_IM_APP`）
 - [ ] 小窗关闭后条消失（`CONTACT_BAR_HIDE reason=TASK_VANISHED`）
 - [ ] 关闭设置开关 → 立即消失（`CONTACT_BAR_PREF_CHANGED enabled=false`）

@@ -3,6 +3,7 @@ package com.repl.bubbledrawer.contactbar
 import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.graphics.drawable.Drawable
 import android.os.Looper
 import android.service.notification.StatusBarNotification
@@ -21,6 +22,16 @@ data class Conversation(
     val postTime: Long,
     /** Notification still posted → the bar shows the unread dot (Flyme's `NewMessageView`). */
     val live: Boolean = false,
+    /**
+     * `PendingIntent.getIntent()` — the launch request behind the tap, kept the way Flyme keeps it
+     * (`C0653b.m3435c()` is exactly this, and `m9364J` sends it as the fill-in Intent).
+     *
+     * This is what makes the tap reliable on HyperOS: opening an app cancels its notifications, and
+     * WeChat cancels their PendingIntents with them, after which `PendingIntent.send` throws
+     * `CanceledException` — while the Intent itself still starts fine.
+     */
+    val launchIntent: Intent? = null,
+    val userId: Int = 0,
 )
 
 /**
@@ -79,6 +90,8 @@ class RecentConversations(
         var key: String?,
         var icon: Drawable?,
         var pendingIntent: PendingIntent?,
+        var launchIntent: Intent?,
+        var userId: Int,
         var postTime: Long,
         var lastSeenAt: Long,
     )
@@ -176,10 +189,12 @@ class RecentConversations(
     private fun remember(conv: Conversation, now: Long) {
         if (isForgotten(conv)) return
         val record = remembered.getOrPut(key(conv.pkg, conv.title)) {
-            Remembered(conv.pkg, conv.title, null, null, null, 0L, now)
+            Remembered(conv.pkg, conv.title, null, null, null, null, conv.userId, 0L, now)
         }
         if (conv.icon != null) record.icon = conv.icon
         if (conv.pendingIntent != null) record.pendingIntent = conv.pendingIntent
+        if (conv.launchIntent != null) record.launchIntent = conv.launchIntent
+        record.userId = conv.userId
         record.key = conv.key
         record.postTime = maxOf(record.postTime, conv.postTime)
         record.lastSeenAt = now
@@ -197,6 +212,8 @@ class RecentConversations(
                 icon = record.icon,
                 pendingIntent = record.pendingIntent,
                 postTime = record.postTime,
+                launchIntent = record.launchIntent,
+                userId = record.userId,
             )
         }
         merged.putAll(live)
@@ -256,7 +273,28 @@ class RecentConversations(
             icon = cachedIcons[key],
             pendingIntent = pi,
             postTime = runCatching { sbn.postTime }.getOrNull() ?: 0L,
+            // Flyme's `C0653b.m3435c()`: the Intent behind the click, so a later tap still works when
+            // the PendingIntent itself has been cancelled along with the notification.
+            // `PendingIntent.getIntent()` is hidden in the current SDK, hence reflection.
+            launchIntent = runCatching {
+                PendingIntent::class.java.getMethod("getIntent").invoke(pi) as? Intent
+            }.getOrNull(),
+            userId = notificationUserId(sbn),
         )
+    }
+
+    /** The notification's user, for `startActivityAsUser` (reflection: `getUserId`/`getUser` are hidden). */
+    private fun notificationUserId(sbn: StatusBarNotification): Int {
+        runCatching {
+            (sbn.javaClass.getMethod("getUserId").invoke(sbn) as? Number)?.let { return it.toInt() }
+        }
+        runCatching {
+            val user = sbn.javaClass.getMethod("getUser").invoke(sbn) ?: return@runCatching
+            val id = user.javaClass.getMethod("getIdentifier").invoke(user) as? Number
+                ?: user.javaClass.getField("mHandle").get(user) as? Number
+            if (id != null) return id.toInt()
+        }
+        return 0
     }
 
     /** Every posted notification: the collection's read-only set, or `getAllNotifs()` on main. */
