@@ -192,5 +192,22 @@ Flyme 样式下小窗的大小 = 一个缩放系数 × ROM 自己的**未缩放*
       —— `scale` 是实际生效系数，`visual=(宽x高)` 是窗口在屏上的大小；
       横屏应满足 `visual 宽 ≤ 屏幕宽`、且 `rect.left/top` 都是正数（居中而非贴边）
 
+## A12 禁止小窗偏移（第二个小窗仍开在同一个位置）
+HyperOS 的「错开」在 `MiuiMultiWindowUtils.avoidIfNeeded:1807`（手机走这一支）：新小窗与已有小窗
+重叠时，把它挪到 `已有窗口.left + FREEFORM_RECT_OFFSET_X_ZIZHAN` / `.top + FREEFORM_RECT_OFFSET_Y_ZIZHAN`
+（:319-320 = **78dp / 44dp**，即"往右下偏一点"）。所有避让都汇聚在 void 且原地改参的
+`avoidAsPossible(Rect, Rect, Rect)` 上（启动 `getFreeformRect:1461` / `getCustomFreeformRect:1541`、
+全屏→小窗 `MulWinSwitchInteractUtil:104`、迷你→普通恢复 `MiuiFreeformModeMiniStateHandler:276`
+与 `MiuiFreeformModePinHandler:953`），所以关掉它一处即可。
+入口：实验性功能 → 窗口尺寸与位置 → **禁止小窗偏移**（默认开）。
+- [ ] 开一个小窗 → 再开第二个（不同应用）→ 两个窗口**位置完全重合**，没有右下偏移
+      （日志 `FREEFORM_OFFSET_SKIPPED mobile=… other=…`；`mobile` 应与 `other` 基本一致）
+- [ ] 关掉本开关再重复 → 第二个小窗回到 HyperOS 原样：相对第一个右移 78dp、下移 44dp
+- [ ] 关掉「小窗居中显示」后重复第一项 → 两个小窗仍落在**同一个默认位置**（这条是关键：
+      居中关闭时不再有模块覆盖位置，全靠本开关压住 ROM 的避让）
+- [ ] 迷你小窗恢复成普通小窗时不因另一个小窗而偏移（同上判据）
+- [ ] 迷你小窗自己的排布（同侧迷你自动排队）、贴边/侧边栏避让不受影响
+- [ ] 全屏 → 小窗切换（小白条上滑悬停等）落在与直接打开一致的默认位置
+
 ## 贴边模式（可选，root）
 - [ ] 设置页"贴边模式"：无 su → toast 需要 root；有 su → inset=0，正上滑角落也能出扇

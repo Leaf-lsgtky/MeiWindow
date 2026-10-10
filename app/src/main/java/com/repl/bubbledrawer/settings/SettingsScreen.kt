@@ -635,6 +635,16 @@ fun ExperimentalSettingsScreen(
                     add(CardItem("center-window-hint") {
                         SliderHintRow(stringResource(R.string.exp_center_window_summary))
                     })
+                    add(CardItem("no-offset") {
+                        SwitchRow(
+                            title = stringResource(R.string.exp_no_offset),
+                            checked = snap.flymeFreeformNoOffset,
+                            onCheckedChange = actions::setFlymeFreeformNoOffset,
+                        )
+                    })
+                    add(CardItem("no-offset-hint") {
+                        SliderHintRow(stringResource(R.string.exp_no_offset_summary))
+                    })
                     add(CardItem("scale-window") {
                         IntSliderRow(
                             title = stringResource(R.string.exp_window_scale),

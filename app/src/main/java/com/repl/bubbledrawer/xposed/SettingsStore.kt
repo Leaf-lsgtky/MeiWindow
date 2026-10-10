@@ -160,6 +160,9 @@ object SettingsStore {
     fun setFlymeFreeformCenter(context: Context, enabled: Boolean) =
         putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_CENTER, enabled)
 
+    fun setFlymeFreeformNoOffset(context: Context, enabled: Boolean) =
+        putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_NO_OFFSET, enabled)
+
     fun setFlymeFreeformScale(context: Context, scale: Int) =
         putInt(context, RemotePrefs.KEY_FLYME_FREEFORM_SCALE, scale.coerceIn(RemotePrefs.FLYME_FREEFORM_SCALE_MIN, RemotePrefs.FLYME_FREEFORM_SCALE_MAX))
 

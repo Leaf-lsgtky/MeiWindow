@@ -149,6 +149,7 @@ object RemotePrefs {
     /** 实验性：Flyme 样式轻量小窗设置 */
     const val KEY_FLYME_FREEFORM_ENABLED = "flyme_freeform_enabled"
     const val KEY_FLYME_FREEFORM_CENTER = "flyme_freeform_center"
+    const val KEY_FLYME_FREEFORM_NO_OFFSET = "flyme_freeform_no_offset"
     const val KEY_FLYME_FREEFORM_SCALE = "flyme_freeform_scale"
     const val KEY_FLYME_FREEFORM_OUTSIDE_DISMISS = "flyme_freeform_outside_dismiss"
     const val KEY_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION = "flyme_freeform_outside_dismiss_action"
@@ -159,6 +160,14 @@ object RemotePrefs {
 
     const val DEFAULT_FLYME_FREEFORM_ENABLED = false
     const val DEFAULT_FLYME_FREEFORM_CENTER = true
+
+    /**
+     * 禁止小窗偏移：已经有小窗时，新开的小窗不再为了避开它而挪位。
+     *
+     * HyperOS 会给第二个小窗加一个「错开」偏移（`MiuiMultiWindowUtils.avoidIfNeeded`：X +78dp、
+     * Y +44dp，正好是往右下偏一点），Flyme 的小窗每次都开在同一个默认位置，所以默认打开本开关。
+     */
+    const val DEFAULT_FLYME_FREEFORM_NO_OFFSET = true
     const val DEFAULT_FLYME_FREEFORM_SCALE = 80
     const val FLYME_FREEFORM_SCALE_MIN = 60
     const val FLYME_FREEFORM_SCALE_MAX = 95
@@ -226,6 +235,8 @@ object RemotePrefs {
         /** 实验性：Flyme 样式轻量小窗设置 */
         val flymeFreeformEnabled: Boolean = DEFAULT_FLYME_FREEFORM_ENABLED,
         val flymeFreeformCenter: Boolean = DEFAULT_FLYME_FREEFORM_CENTER,
+        /** 已经有小窗时，新小窗不再为避让而偏移（HyperOS 默认 X+78dp / Y+44dp） */
+        val flymeFreeformNoOffset: Boolean = DEFAULT_FLYME_FREEFORM_NO_OFFSET,
         val flymeFreeformScale: Int = DEFAULT_FLYME_FREEFORM_SCALE,
         val flymeFreeformOutsideDismiss: Boolean = DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS,
         val flymeFreeformOutsideDismissAction: Int = DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION,
@@ -284,6 +295,7 @@ object RemotePrefs {
             recommendCount = snappedRecCount,
             flymeFreeformEnabled = sp.getBoolean(KEY_FLYME_FREEFORM_ENABLED, DEFAULT_FLYME_FREEFORM_ENABLED),
             flymeFreeformCenter = sp.getBoolean(KEY_FLYME_FREEFORM_CENTER, DEFAULT_FLYME_FREEFORM_CENTER),
+            flymeFreeformNoOffset = sp.getBoolean(KEY_FLYME_FREEFORM_NO_OFFSET, DEFAULT_FLYME_FREEFORM_NO_OFFSET),
             flymeFreeformScale = sp.getInt(KEY_FLYME_FREEFORM_SCALE, DEFAULT_FLYME_FREEFORM_SCALE).coerceIn(FLYME_FREEFORM_SCALE_MIN, FLYME_FREEFORM_SCALE_MAX),
             flymeFreeformOutsideDismiss = sp.getBoolean(KEY_FLYME_FREEFORM_OUTSIDE_DISMISS, DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS),
             flymeFreeformOutsideDismissAction = sp.getInt(KEY_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION, DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION).coerceIn(0, 1),

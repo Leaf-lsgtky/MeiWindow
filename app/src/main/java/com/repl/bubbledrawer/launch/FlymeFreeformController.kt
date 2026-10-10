@@ -1305,6 +1305,7 @@ class FlymeFreeformController(
             hookFreeformLaunchConfig(module, prefs, classLoader)
             hookFreeformScale(module, prefs, classLoader)
             hookBoundsCentering(module, prefs, classLoader)
+            hookFreeformAvoidOffset(module, prefs, classLoader)
             hookTaskRepository(module, classLoader)
             hookRawTaskAppeared(module, classLoader)
             hookVelocityMonitor(module, classLoader)
@@ -1746,6 +1747,69 @@ class FlymeFreeformController(
                 }
             }
             log("HOOK_INSTALLED_MiuiMultiWindowUtils.getFreeFormScale")
+        }
+
+        /**
+         * 禁止小窗偏移 — 已经有小窗时，新开的小窗不再为了避开它而挪位。
+         *
+         * HyperOS 的「错开」就是在 `avoidIfNeeded`（MiuiMultiWindowUtils:1807，手机走这一支）里做的：
+         * 新窗口和已有窗口重叠时，把新窗口挪到 `fixed.left + FREEFORM_RECT_OFFSET_X_ZIZHAN` /
+         * `fixed.top + FREEFORM_RECT_OFFSET_Y_ZIZHAN` —— 两个常量是 **78dp / 44dp**
+         * （:319-320），也就是用户看到的「往右下偏一点」。
+         *
+         * `avoidAsPossible(Rect mobile, …)` 是 void 并且**原地**改第一个参数，是所有「避让另一个小窗」
+         * 逻辑的唯一咽喉：
+         *  - 启动：`getFreeformRect:1461` / `getCustomFreeformRect:1541` → `getAvoidFreeformBounds:1547`
+         *  - 全屏 → 小窗切换：`MulWinSwitchInteractUtil:104` → `getAvoidFreeformBounds`
+         *  - 迷你 → 普通恢复：`MiuiFreeformModeMiniStateHandler:276` / `MiuiFreeformModePinHandler:953`
+         *    → `MiuiFreeformModeAvoidAlgorithm.avoidOtherFreeformTaskIfNeed:909`
+         * 所以在这里不 proceed，就等于"每个小窗都开在/回到同一个默认位置"，
+         * 而且它只挪位、不动尺寸：缩放、居中、屏幕内夹取都是这一步之前算好的。
+         *
+         * 迷你小窗自己的排布（`autoOrderingAvoidMiniTask` / `avoidForActiveMiniTask`）不走这个函数，
+         * 贴边/侧边栏避让（`adjustBoundsForSidebarIfNeed`）也不走，都不受影响。
+         */
+        private fun hookFreeformAvoidOffset(
+            module: XposedModule,
+            prefs: SharedPreferences,
+            classLoader: ClassLoader,
+        ) {
+            val utilsClass = runCatching {
+                classLoader.loadClass("android.util.MiuiMultiWindowUtils")
+            }.getOrNull() ?: return
+
+            val method = runCatching {
+                utilsClass.getDeclaredMethod("avoidAsPossible", Rect::class.java, Rect::class.java, Rect::class.java)
+            }.getOrNull() ?: return
+
+            runCatching {
+                module.hook(method)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .setId("bubbledrawer.freeform.no_offset")
+                    .intercept { chain ->
+                        val snap = RemotePrefs.read(prefs)
+                        if (!snap.flymeFreeformEnabled || !snap.flymeFreeformNoOffset) {
+                            return@intercept chain.proceed()
+                        }
+                        logOffsetSkipped(chain.args)
+                        null
+                    }
+            }
+            log("HOOK_INSTALLED_MiuiMultiWindowUtils.avoidAsPossible")
+        }
+
+        /** One line per (new window, existing window) pair — this runs on launches, not per frame. */
+        @Volatile private var offsetLogged = false
+        @Volatile private var lastOffsetKey = 0
+
+        private fun logOffsetSkipped(args: List<Any?>) {
+            val mobile = args.getOrNull(0) as? Rect
+            val fixed = args.getOrNull(1) as? Rect
+            val key = (mobile?.hashCode() ?: 0) * 31 + (fixed?.hashCode() ?: 0)
+            if (offsetLogged && key == lastOffsetKey) return
+            offsetLogged = true
+            lastOffsetKey = key
+            log("FREEFORM_OFFSET_SKIPPED mobile=$mobile other=$fixed")
         }
 
         private fun hookBoundsCentering(
