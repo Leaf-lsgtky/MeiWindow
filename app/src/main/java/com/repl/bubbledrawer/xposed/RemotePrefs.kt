@@ -92,6 +92,34 @@ object RemotePrefs {
     const val FAN_RADIUS_MIN = 180
     const val FAN_RADIUS_MAX = 360
 
+    /** 扇形滑出时振动一下（默认开启，与 Flyme 的手感一致）。 */
+    const val KEY_FAN_SHOW_VIBRATE = "fan_show_vibrate"
+    const val DEFAULT_FAN_SHOW_VIBRATE = true
+
+    /**
+     * 扇形滑出后不点选就自动收回的时间（秒）。0 = 一直停留，直到点选应用、点按外部或熄屏。
+     *
+     * 参考实现固定 5s（CornerRadialOverlayView 的 GESTURE_TIMEOUT_MS）；这里做成可调，默认取
+     * 10s —— 5s 那份曾被用户否掉（"扇形面板弹出后不要过几秒就消失"），10s 既满足"不点就退回"，
+     * 又不至于让人还没看清就没了。想要老手感就拖到 5，想永远停留就拖到最左。
+     */
+    const val KEY_FAN_AUTO_RETRACT_SEC = "fan_auto_retract_sec"
+    const val DEFAULT_FAN_AUTO_RETRACT_SEC = 10
+    const val FAN_AUTO_RETRACT_MIN = 0
+    const val FAN_AUTO_RETRACT_MAX = 30
+
+    /** 扇形图标大小（dp，默认 = launcher_app_item_icon_width 44dp）。 */
+    const val KEY_FAN_ICON_DP = "fan_icon_dp"
+    const val DEFAULT_FAN_ICON_DP = 44
+    const val FAN_ICON_MIN = 32
+    const val FAN_ICON_MAX = 64
+
+    /** 扇形图标形状：0 = 圆形（Flyme 原样），1 = 系统样式圆角矩形。 */
+    const val KEY_FAN_ICON_SHAPE = "fan_icon_shape"
+    const val FAN_ICON_SHAPE_CIRCLE = 0
+    const val FAN_ICON_SHAPE_ROUNDED = 1
+    const val DEFAULT_FAN_ICON_SHAPE = FAN_ICON_SHAPE_CIRCLE
+
     /** 扇形应用未摆满时用推荐应用填满（默认关闭） */
     const val KEY_FAN_AUTO_FILL_RECOMMEND = "fan_auto_fill_recommend"
     const val DEFAULT_FAN_AUTO_FILL_RECOMMEND = false
@@ -179,6 +207,14 @@ object RemotePrefs {
         val fanIconCount: Int = DEFAULT_FAN_ICON_COUNT,
         /** 展开扇形半径（dp） */
         val fanRadiusDp: Int = DEFAULT_FAN_RADIUS_DP,
+        /** 扇形滑出时振动 */
+        val fanShowVibrate: Boolean = DEFAULT_FAN_SHOW_VIBRATE,
+        /** 扇形滑出后不点选自动收回的秒数（0 = 不自动收回） */
+        val fanAutoRetractSec: Int = DEFAULT_FAN_AUTO_RETRACT_SEC,
+        /** 扇形图标大小（dp） */
+        val fanIconDp: Int = DEFAULT_FAN_ICON_DP,
+        /** 扇形图标形状：0 = 圆形，1 = 系统样式圆角矩形 */
+        val fanIconShape: Int = DEFAULT_FAN_ICON_SHAPE,
         /** 扇形未摆满时用推荐应用填满 */
         val fanAutoFillRecommend: Boolean = DEFAULT_FAN_AUTO_FILL_RECOMMEND,
         /** 扇形重按翻页开关与灵敏度 */
@@ -236,6 +272,11 @@ object RemotePrefs {
             panelDismissOutside = sp.getInt(KEY_PANEL_DISMISS_OUTSIDE, DEFAULT_PANEL_DISMISS_OUTSIDE).coerceIn(0, 1),
             fanIconCount = sp.getInt(KEY_FAN_ICON_COUNT, DEFAULT_FAN_ICON_COUNT).coerceIn(5, 6),
             fanRadiusDp = sp.getInt(KEY_FAN_RADIUS_DP, DEFAULT_FAN_RADIUS_DP).let { if (it <= 0) DEFAULT_FAN_RADIUS_DP else it.coerceIn(FAN_RADIUS_MIN, FAN_RADIUS_MAX) },
+            fanShowVibrate = sp.getBoolean(KEY_FAN_SHOW_VIBRATE, DEFAULT_FAN_SHOW_VIBRATE),
+            fanAutoRetractSec = sp.getInt(KEY_FAN_AUTO_RETRACT_SEC, DEFAULT_FAN_AUTO_RETRACT_SEC)
+                .coerceIn(FAN_AUTO_RETRACT_MIN, FAN_AUTO_RETRACT_MAX),
+            fanIconDp = sp.getInt(KEY_FAN_ICON_DP, DEFAULT_FAN_ICON_DP).let { if (it <= 0) DEFAULT_FAN_ICON_DP else it.coerceIn(FAN_ICON_MIN, FAN_ICON_MAX) },
+            fanIconShape = sp.getInt(KEY_FAN_ICON_SHAPE, DEFAULT_FAN_ICON_SHAPE).coerceIn(0, 1),
             fanAutoFillRecommend = sp.getBoolean(KEY_FAN_AUTO_FILL_RECOMMEND, DEFAULT_FAN_AUTO_FILL_RECOMMEND),
             fanPressurePageTurn = sp.getBoolean(KEY_FAN_PRESSURE_PAGE_TURN, DEFAULT_FAN_PRESSURE_PAGE_TURN),
             fanPressureSensitivity = sp.getInt(KEY_FAN_PRESSURE_SENSITIVITY, DEFAULT_FAN_PRESSURE_SENSITIVITY).coerceIn(0, 2),

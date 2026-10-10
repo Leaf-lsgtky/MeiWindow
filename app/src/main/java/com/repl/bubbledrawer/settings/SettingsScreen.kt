@@ -324,6 +324,61 @@ fun FanSettingsScreen(
                             onCommit = actions::setFanRadiusDp,
                         )
                     })
+                    add(CardItem("show_vibrate") {
+                        SwitchRow(
+                            title = stringResource(R.string.fan_show_vibrate),
+                            checked = snap.fanShowVibrate,
+                            onCheckedChange = actions::setFanShowVibrate,
+                        )
+                    })
+                    add(CardItem("show_vibrate_hint") {
+                        SliderHintRow(stringResource(R.string.fan_show_vibrate_summary))
+                    })
+                    add(CardItem("auto_retract") {
+                        DefaultableIntSliderRow(
+                            title = stringResource(R.string.fan_auto_retract),
+                            value = snap.fanAutoRetractSec,
+                            defaultValue = RemotePrefs.DEFAULT_FAN_AUTO_RETRACT_SEC,
+                            min = RemotePrefsFanAutoRetractMin,
+                            max = RemotePrefsFanAutoRetractMax,
+                            valueText = {
+                                if (it <= 0) {
+                                    stringResource(R.string.fan_auto_retract_never)
+                                } else {
+                                    stringResource(R.string.sec_value, it)
+                                }
+                            },
+                            onCommit = actions::setFanAutoRetractSec,
+                        )
+                    })
+                    add(CardItem("auto_retract_hint") {
+                        SliderHintRow(stringResource(R.string.fan_auto_retract_summary))
+                    })
+                    add(CardItem("icon_size") {
+                        DefaultableIntSliderRow(
+                            title = stringResource(R.string.fan_icon_size),
+                            value = snap.fanIconDp,
+                            defaultValue = RemotePrefs.DEFAULT_FAN_ICON_DP,
+                            min = RemotePrefsFanIconMin,
+                            max = RemotePrefsFanIconMax,
+                            valueText = { stringResource(R.string.dp_value, it) },
+                            onCommit = actions::setFanIconDp,
+                        )
+                    })
+                    add(CardItem("icon_shape") {
+                        DropdownRow(
+                            title = stringResource(R.string.fan_icon_shape),
+                            items = listOf(
+                                stringResource(R.string.fan_icon_shape_circle),
+                                stringResource(R.string.fan_icon_shape_rounded),
+                            ),
+                            selectedIndex = snap.fanIconShape.coerceIn(0, 1),
+                            onSelect = actions::setFanIconShape,
+                        )
+                    })
+                    add(CardItem("icon_shape_hint") {
+                        SliderHintRow(stringResource(R.string.fan_icon_shape_summary))
+                    })
                     add(CardItem("auto_fill") {
                         SwitchRow(
                             title = stringResource(R.string.fan_auto_fill_recommend),

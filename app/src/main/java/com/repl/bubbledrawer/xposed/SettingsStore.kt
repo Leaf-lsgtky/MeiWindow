@@ -107,6 +107,24 @@ object SettingsStore {
     /** 展开扇形半径（dp）。 */
     fun setFanRadiusDp(context: Context, dp: Int) = putInt(context, RemotePrefs.KEY_FAN_RADIUS_DP, dp.coerceIn(RemotePrefs.FAN_RADIUS_MIN, RemotePrefs.FAN_RADIUS_MAX))
 
+    /** 扇形滑出时振动一下。 */
+    fun setFanShowVibrate(context: Context, enabled: Boolean) {
+        RemoteBridge.local(context).edit().putBoolean(RemotePrefs.KEY_FAN_SHOW_VIBRATE, enabled).apply()
+        RemoteBridge.remote?.edit()?.putBoolean(RemotePrefs.KEY_FAN_SHOW_VIBRATE, enabled)?.apply()
+    }
+
+    /** 扇形滑出后不点选自动收回的秒数（0 = 不自动收回）。 */
+    fun setFanAutoRetractSec(context: Context, sec: Int) =
+        putInt(context, RemotePrefs.KEY_FAN_AUTO_RETRACT_SEC, sec.coerceIn(RemotePrefs.FAN_AUTO_RETRACT_MIN, RemotePrefs.FAN_AUTO_RETRACT_MAX))
+
+    /** 扇形图标大小（dp）。 */
+    fun setFanIconDp(context: Context, dp: Int) =
+        putInt(context, RemotePrefs.KEY_FAN_ICON_DP, dp.coerceIn(RemotePrefs.FAN_ICON_MIN, RemotePrefs.FAN_ICON_MAX))
+
+    /** 扇形图标形状（0 = 圆形，1 = 系统样式圆角矩形）。 */
+    fun setFanIconShape(context: Context, shape: Int) =
+        putInt(context, RemotePrefs.KEY_FAN_ICON_SHAPE, shape.coerceIn(0, 1))
+
     /** 扇形未摆满时用推荐应用填满开关。 */
     fun setFanAutoFillRecommend(context: Context, enabled: Boolean) {
         RemoteBridge.local(context).edit().putBoolean(RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND, enabled).apply()

@@ -35,6 +35,10 @@ const val RemotePrefsTextMin = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_TE
 const val RemotePrefsTextMax = com.repl.bubbledrawer.xposed.RemotePrefs.PANEL_TEXT_MAX
 const val RemotePrefsFanRadiusMin = com.repl.bubbledrawer.xposed.RemotePrefs.FAN_RADIUS_MIN
 const val RemotePrefsFanRadiusMax = com.repl.bubbledrawer.xposed.RemotePrefs.FAN_RADIUS_MAX
+const val RemotePrefsFanIconMin = com.repl.bubbledrawer.xposed.RemotePrefs.FAN_ICON_MIN
+const val RemotePrefsFanIconMax = com.repl.bubbledrawer.xposed.RemotePrefs.FAN_ICON_MAX
+const val RemotePrefsFanAutoRetractMin = com.repl.bubbledrawer.xposed.RemotePrefs.FAN_AUTO_RETRACT_MIN
+const val RemotePrefsFanAutoRetractMax = com.repl.bubbledrawer.xposed.RemotePrefs.FAN_AUTO_RETRACT_MAX
 
 /** Bridge status line: module chip + one-line state, per the old page's status text. */
 @Composable

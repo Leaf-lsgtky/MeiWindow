@@ -246,10 +246,21 @@ class BubbleDockController(
         val v = LayoutInflater.from(context)
             .inflate(R.layout.slide_gesture_list_item, launcher, false)
         v.layoutParams = GestureAppLauncher.LayoutParams()
-        val icon = v.findViewById<de.hdodenhof.circleimageview.CircleImageView>(R.id.slide_icon)
-        when (item) {
-            is GestureAppLauncher.AdapterItem.AppItem -> icon.setImageDrawable(repo.icon(item.app))
-            GestureAppLauncher.AdapterItem.More -> icon.setImageResource(R.drawable.icon_gesture_more_app)
+        // 图标大小/形状：与 SystemUI 里的 FanHost.buildTile 读同一套设置（本地镜像），
+        // 保证两条建 tile 的路径长得一样。
+        val snap = com.repl.bubbledrawer.xposed.RemotePrefs.read(
+            runCatching { com.repl.bubbledrawer.xposed.RemoteBridge.local(context) }.getOrNull(),
+        )
+        if (v is SlideGestureItemView) v.iconShape = snap.fanIconShape
+        val icon = v.findViewById<SlideIconView>(R.id.slide_icon)
+        if (icon != null) {
+            val px = (snap.fanIconDp * context.resources.displayMetrics.density).toInt()
+            icon.layoutParams = android.widget.FrameLayout.LayoutParams(px, px)
+            icon.shape = snap.fanIconShape
+            when (item) {
+                is GestureAppLauncher.AdapterItem.AppItem -> icon.setImageDrawable(repo.icon(item.app))
+                GestureAppLauncher.AdapterItem.More -> icon.setImageResource(R.drawable.icon_gesture_more_app)
+            }
         }
         // ORIGINAL: the adapter sets a click listener on every tile
         // (C2937F.m9712g :142 → C2937F$a.onClick :56-69 → mo9283j(item, view, reason=1)),

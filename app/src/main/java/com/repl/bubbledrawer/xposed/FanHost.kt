@@ -28,6 +28,7 @@ import com.repl.bubbledrawer.bubble.BubbleDockController
 import com.repl.bubbledrawer.bubble.FanPressureDetector
 import com.repl.bubbledrawer.bubble.GestureAppLauncher
 import com.repl.bubbledrawer.bubble.SlideGestureItemView
+import com.repl.bubbledrawer.bubble.SlideIconView
 import com.repl.bubbledrawer.data.AppRepository
 import com.repl.bubbledrawer.data.LaunchCountStore
 import android.os.VibrationEffect
@@ -45,7 +46,6 @@ import com.repl.bubbledrawer.launch.FullscreenLaunchStrategy
 import com.repl.bubbledrawer.launch.ILaunchStrategy
 import com.repl.bubbledrawer.pin.PanelContentFactory
 import com.repl.bubbledrawer.pin.PinManageModel
-import de.hdodenhof.circleimageview.CircleImageView
 import kotlinx.coroutines.launch
 
 /**
@@ -59,10 +59,9 @@ import kotlinx.coroutines.launch
  *  • release decisions — forwarded UP runs GestureAppLauncher m9729p (launch over
  *    an icon / cancelFlag collapse after pull-back / stay open over plain void)
  *  • void DOWN on the canvas closes — verbatim C2822g.onTouchEvent :381-393
- *  • 5s inactivity timeout RE-ARMED ON EVERY EVENT — reference :186-187 (arm on
- *    beginGesture) and :194-195 (re-arm on updateGesture), GESTURE_TIMEOUT_MS
- *    = 5_000L (:1000). This is the self-heal that guarantees the panel ALWAYS
- *    retracts even if a UP is somehow lost — the user's "依旧无法收回" backstop.
+ *  • 不操作自动收起 — 用户在设置里给的秒数（默认 10s，0 = 不收起）。参考实现在
+ *    beginGesture/updateGesture 上以固定 5s 重新计时（:186-187 / :194-195），这里同规则、
+ *    时长可调：每个事件（含 UP）重新计时，所以滑出后不点选才会收回。
  *  • SCREEN_OFF → retract (original mo864f :1049-1056)
  */
 class FanHost(
@@ -220,7 +219,11 @@ class FanHost(
     private var canvas: FrameLayout? = null
     private var fanWindowsUp = false
 
-    private val timeout = Runnable { if (dock.isBusy) retract("TIMEOUT") }
+    private val timeout = Runnable {
+        // 自动收起（用户 2026-10-10 新增的设置项）：只在扇形还开着、且设置仍要求自动收起时生效
+        // —— 用户可能在计时期间把滑块拖到「不自动收起」。
+        if (dock.isBusy && RemotePrefs.read(prefs).fanAutoRetractSec > 0) retract("AUTO_TIMEOUT")
+    }
     private var screenOffReceiver: android.content.BroadcastReceiver? = null
     private var pinsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     private var syncFromAppReceiver: android.content.BroadcastReceiver? = null
@@ -234,7 +237,17 @@ class FanHost(
         val initialSnap = RemotePrefs.read(prefs)
         pressureDetector.isEnabled = initialSnap.fanPressurePageTurn
         pressureDetector.thresholdHpa = RemotePrefs.sensitivityToThreshold(initialSnap.fanPressureSensitivity)
-        dock.onShownChanged = { shown -> if (!shown) fadeOutFanWindows() }
+        dock.onShownChanged = { shown ->
+            if (shown) {
+                // 扇形「滑出来」的瞬间（expand 动画开始）振一下 —— 用户 2026-10-10 新增开关。
+                maybeVibrateFanShown()
+                // 也在这里开始计时：手速极快时 UP 可能早于这一帧的 layout 到达，
+                // 那样 armTimeout() 在事件里会因 isBusy 还是 false 而不计时（扇形就永不自动收回了）。
+                armTimeout()
+            } else {
+                fadeOutFanWindows()
+            }
+        }
         // 更多 tile → overlay panel instead of the full-screen Activity (方案 B)
         dock.onMoreRequested = { showMorePanel() }
         scope.launch {
@@ -272,7 +285,10 @@ class FanHost(
                     null,
                 )
                 rebindFanIfBusy()
-            } else if (key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP || key == RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND) {
+            } else if (key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP ||
+                key == RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND || key == RemotePrefs.KEY_FAN_ICON_DP ||
+                key == RemotePrefs.KEY_FAN_ICON_SHAPE
+            ) {
                 rebindFanIfBusy()
             } else if (key == RemotePrefs.KEY_FAN_PRESSURE_PAGE_TURN || key == RemotePrefs.KEY_FAN_PRESSURE_SENSITIVITY) {
                 val snap = RemotePrefs.read(prefs)
@@ -427,7 +443,7 @@ class FanHost(
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, downX, downY, 0)
         dock.forward(down, 0)
         down.recycle()
-        armTimeout() // reference :186-187 (beginGesture → postDelayed(timeout, GESTURE_TIMEOUT_MS))
+        armTimeout() // reference :186-187 (beginGesture → postDelayed(timeout, …))
     }
 
     /** A pilfered MOVE/UP in SCREEN coords — one continuous stream, so the
@@ -492,11 +508,7 @@ class FanHost(
     }
 
     private fun performHeavyPressHaptic() {
-        val vibrator = if (android.os.Build.VERSION.SDK_INT >= 31) {
-            host.getSystemService(VibratorManager::class.java)?.defaultVibrator
-        } else {
-            host.getSystemService(Vibrator::class.java)
-        }
+        val vibrator = defaultVibrator()
         if (vibrator != null && vibrator.hasVibrator()) {
             try {
                 val effect = VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK)
@@ -514,21 +526,64 @@ class FanHost(
         }
     }
 
+    /**
+     * 扇形滑出时的振动（设置项「滑出时振动」，默认开启）。
+     *
+     * Deliberately lighter than [performHeavyPressHaptic]: this fires on every fan opening, so it uses
+     * the platform's TICK — the same class of feedback as the per-icon hover tick
+     * (`GestureAppLauncher` :553-554), just once for the whole panel.
+     */
+    private fun maybeVibrateFanShown() {
+        if (!RemotePrefs.read(prefs).fanShowVibrate) return
+        val vibrator = defaultVibrator()
+        if (vibrator != null && vibrator.hasVibrator()) {
+            val done = runCatching {
+                vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+                true
+            }.getOrDefault(false)
+            if (done) return
+            val shot = runCatching {
+                vibrator.vibrate(VibrationEffect.createOneShot(20L, 120))
+                true
+            }.getOrDefault(false)
+            if (shot) return
+        }
+        dock.launcher.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+    }
+
+    private fun defaultVibrator(): Vibrator? = if (android.os.Build.VERSION.SDK_INT >= 31) {
+        host.getSystemService(VibratorManager::class.java)?.defaultVibrator
+    } else {
+        @Suppress("DEPRECATION")
+        host.getSystemService(Vibrator::class.java)
+    }
+
     private fun armTimeout() {
-        // Disabled: 用户要求“扇形面板弹出后不要过几秒就消失”，仅在点按外部、选中应用或熄屏时收起
+        // 扇形滑出后不点选就自动收回：每次事件（含 UP/CANCEL）重新计时，时长来自设置
+        // （0 = 不自动收起）。参考实现同样在 beginGesture/updateGesture 上重新计时
+        // （CornerRadialOverlayView :186-187 / :194-195，固定 5s），这里换成用户可调。
         mainHandler.removeCallbacks(timeout)
+        if (!dock.isBusy) return
+        val sec = RemotePrefs.read(prefs).fanAutoRetractSec
+        if (sec <= 0) return
+        mainHandler.postDelayed(timeout, sec * 1000L)
     }
 
     // ---------------- tile building ----------------
 
     /** slide_gesture_list_item.xml (verbatim port) built in code —
      *  SlideGestureItemView padding=slide_gesture_item_padding (:5-7 of the layout),
-     *  inner FrameLayout wrap (:9-17), CircleImageView launcher_app_item_icon_width.
+     *  inner FrameLayout wrap (:9-17), icon sized by the 图标大小 setting (default =
+     *  launcher_app_item_icon_width 44dp) and shaped by 图标形状 ([SlideIconView]).
      *  Direct construction: LSPosed loads our whole dex once, so this IS the same
      *  class identity GestureAppLauncher uses (ring drawing included). */
     private fun buildTile(item: GestureAppLauncher.AdapterItem): View {
         val res = context.resources
+        // 图标大小/形状是用户设置（每次 bind 读一次；条目只有 5–7 个）。
+        val snap = RemotePrefs.read(prefs)
+        val iconPx = (snap.fanIconDp * res.displayMetrics.density).toInt()
         val tile = SlideGestureItemView(context)
+        tile.iconShape = snap.fanIconShape
         val pad = res.getDimensionPixelSize(R.dimen.slide_gesture_item_padding)
         tile.setPadding(pad, pad, pad, pad)
         val inner = FrameLayout(context).apply {
@@ -537,12 +592,10 @@ class FanHost(
                 android.widget.RelativeLayout.LayoutParams.WRAP_CONTENT,
             )
         }
-        val icon = CircleImageView(context).apply {
+        val icon = SlideIconView(context).apply {
             id = R.id.slide_icon // SlideGestureItemView:73 findViewById(R.id.slide_icon)
-            layoutParams = FrameLayout.LayoutParams(
-                res.getDimensionPixelSize(R.dimen.launcher_app_item_icon_width),
-                res.getDimensionPixelSize(R.dimen.launcher_app_item_icon_width),
-            )
+            shape = snap.fanIconShape
+            layoutParams = FrameLayout.LayoutParams(iconPx, iconPx)
         }
         when (item) {
             is GestureAppLauncher.AdapterItem.AppItem -> icon.setImageDrawable(repo.icon(item.app))
@@ -953,6 +1006,5 @@ class FanHost(
         /** 默认面板占地（屏幕百分比），两个轴都用它 —— 与启动小窗的默认尺寸对齐。 */
         const val DEFAULT_PANEL_PCT = 62
         const val FADE = 130L
-        const val GESTURE_TIMEOUT_MS = 5_000L // reference CornerRadialOverlayView :1000
     }
 }
