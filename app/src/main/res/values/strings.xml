@@ -72,7 +72,7 @@
     <string name="category_trigger">触发手势与区域</string>
     <string name="category_trigger_summary">触发位置 · 沿底边/侧边范围 · 区域预览</string>
     <string name="category_fan">扇形面板外观</string>
-    <string name="category_fan_summary">应用图标数量 · 展开扇形半径</string>
+    <string name="category_fan_summary">图标数量 · 展开半径 · 滑出振动 · 不操作自动收起 · 图标大小与形状</string>
     <string name="category_panel">更多应用面板</string>
     <string name="category_panel_summary">面板尺寸 · 图标与文字大小 · 外部收起方式</string>
     <string name="category_manage">收藏应用管理</string>
