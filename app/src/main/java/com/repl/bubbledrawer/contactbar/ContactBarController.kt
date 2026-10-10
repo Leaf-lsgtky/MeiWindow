@@ -396,7 +396,9 @@ class ContactBarController(
         }
         val limitBottom = if (imeTop > 0) minOf(screenH - navBottom, imeTop) else screenH - navBottom
 
-        val width = bounds.width().coerceAtLeast(dp(90))
+        // The bar follows the window's width (Flyme parity). A 小窗 is never wider than the display —
+        // the scale hook clamps it even in 横屏 — but the coerce keeps the bar on screen regardless.
+        val width = bounds.width().coerceIn(dp(90), screenW)
         var x = bounds.left
         if (x + width > screenW) x = screenW - width
         if (x < 0) x = 0

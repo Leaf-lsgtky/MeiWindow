@@ -1108,6 +1108,12 @@ class FlymeFreeformController(
     // -------------------------------------------------------------------------
 
     fun getVisualBounds(taskInfo: Any): Rect {
+        // The window's own scaled rect is authoritative, and after 横屏 it is the only thing that
+        // knows the scale the ROM settled on (hookFreeformScale clamps it to fit, which is not the
+        // setting verbatim). The preference-based math below stays as the fallback for the objects
+        // that cannot answer it (a bare `RawWindow` leash, a task mid-creation).
+        FreeformTask.visualBounds(taskInfo)?.let { if (!it.isEmpty) return it }
+
         val isAnim = runCatching {
             taskInfo.javaClass.getMethod("isInAnimating").invoke(taskInfo) as? Boolean ?: false
         }.getOrDefault(false)
@@ -1217,6 +1223,35 @@ class FlymeFreeformController(
                     mod.log(Log.INFO, TAG, msg)
                 }
             }
+        }
+
+        /**
+         * The scale hook's own log line. Deduped on the numbers it reports: the ROM asks for this
+         * value whenever it sets up an animation or a resize setup, and an unchanged answer is not
+         * news — but this is the line to look at when a 小窗's size is questioned (`clamped=true`
+         * means the setting would not have fitted, i.e. 横屏 inside the window).
+         *
+         * The hot path stays allocation-free: only a changed answer builds a string.
+         */
+        @Volatile private var scaleLogged = false
+        @Volatile private var lastScaleKey = 0
+
+        private fun logScale(method: String, args: List<Any?>, target: Float, rom: Float?, used: Float) {
+            val key = ((method.hashCode() * 31 + target.hashCode()) * 31 + (rom?.hashCode() ?: 0)) * 31 + used.hashCode()
+            if (scaleLogged && key == lastScaleKey) return
+            scaleLogged = true
+            lastScaleKey = key
+            log(
+                "FREEFORM_SCALE $method(${args.joinToString(",") { argText(it) }}) " +
+                    "target=$target rom=$rom used=$used clamped=${rom != null && rom < target}",
+            )
+        }
+
+        private fun argText(arg: Any?): String = when (arg) {
+            null -> "null"
+            is Boolean, is Number -> arg.toString()
+            is String -> arg
+            else -> arg.javaClass.simpleName
         }
 
         fun getTaskId(taskInfo: Any): Int {
@@ -1666,6 +1701,23 @@ class FlymeFreeformController(
             log("HOOK_INSTALLED_MiuiFreeformLaunchConfig.getFreeformArg")
         }
 
+        /**
+         * The 小窗's size is one scale factor that the ROM multiplies with its own unscaled task
+         * bounds (`MiuiMultiWindowUtils.getPossibleBounds`). Those bounds are **orientation
+         * dependent**: on the same short side a portrait window is `shortSide * ratio` wide, a
+         * landscape one is `shortSide * ratio * aspect` wide — ~2.2x wider on this phone. Returning
+         * the setting verbatim is therefore only safe in portrait: 横屏 inside the 小窗 made the
+         * window wider than the display, and `startFreeformOrientationChangeShellTransition`
+         * (MiuiFreeformModeAnimation:5320) only *offsets* such a rect into place, never shrinks it —
+         * so the content ran off the screen.
+         *
+         * The ROM's own value is that same preferred scale *after* `reviewFreeFormBounds`
+         * (MiuiMultiWindowUtils:2267), which shrinks it until the visual rect fits the freeform
+         * accessible area — i.e. exactly the "fits on screen" rule, for either orientation and for
+         * every app aspect the ROM knows about (game apps, `ADDITIONAL_FREEFORM_RESOLUTIONS`).
+         * Taking whichever of the two is smaller therefore keeps the Flyme-style size wherever it
+         * is legal, and lets the ROM clamp only where the setting would not fit.
+         */
         private fun hookFreeformScale(
             module: XposedModule,
             prefs: SharedPreferences,
@@ -1683,11 +1735,12 @@ class FlymeFreeformController(
                             .setId("bubbledrawer.freeform.scale.${m.name}.${m.parameterCount}")
                             .intercept { chain ->
                                 val snap = RemotePrefs.read(prefs)
-                                if (snap.flymeFreeformEnabled) {
-                                    (snap.flymeFreeformScale.coerceIn(50, 95)) / 100f
-                                } else {
-                                    chain.proceed()
-                                }
+                                if (!snap.flymeFreeformEnabled) return@intercept chain.proceed()
+                                val target = (snap.flymeFreeformScale.coerceIn(50, 95)) / 100f
+                                val rom = (chain.proceed() as? Number)?.toFloat()
+                                val used = fitFreeformScale(target, rom)
+                                logScale(m.name, chain.args, target, rom, used)
+                                used
                             }
                     }
                 }
@@ -1774,6 +1827,12 @@ class FlymeFreeformController(
         }
 
         private fun centerRectOnScreen(rect: Rect, snap: RemotePrefs.Snapshot) {
+            // Portrait only. A landscape window is ~2.2x wider on the same short side and its scale is
+            // clamped to exactly fit the display (hookFreeformScale), so centering it with this
+            // portrait math would compute a negative left and hang it off *both* screen edges. The
+            // ROM's own `getLeftMargin` already centered it with the clamped scale — our
+            // ARGS_LEFT_MARGIN override (-1) is precisely what sends it down that branch.
+            if (rect.width() >= rect.height()) return
             val dm = android.content.res.Resources.getSystem().displayMetrics
             val targetScale = (snap.flymeFreeformScale.coerceIn(50, 95)) / 100f
             val visualW = rect.width() * targetScale
@@ -2074,3 +2133,19 @@ class FlymeFreeformController(
         }
     }
 }
+
+/**
+ * The 小窗 scale that is actually handed to the ROM: the user's setting ([target]), capped by what
+ * the ROM itself computed for the very same window ([romScale], i.e. our preferred scale after its
+ * own `reviewFreeFormBounds` — see `FlymeFreeformController.hookFreeformScale`).
+ *
+ * The cap matters because the ROM's unscaled task bounds are orientation dependent: a landscape
+ * window is `aspect` times wider than a portrait one on the same short side, so the setting that
+ * looks right in portrait makes a 横屏 window wider than the display — and the ROM's rotation path
+ * only *offsets* such a rect into place, never shrinks it, so the content ends up off the screen.
+ *
+ * A ROM answer that is unusable (null when the method is missing, 0 when its resolution config
+ * cannot be read, NaN) falls back to the setting, which is what the hook did before the cap existed.
+ */
+fun fitFreeformScale(target: Float, romScale: Float?): Float =
+    if (romScale == null || !romScale.isFinite() || romScale <= 0f) target else minOf(target, romScale)

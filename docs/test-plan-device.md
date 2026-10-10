@@ -170,5 +170,22 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - [ ] 切换形状后点选/悬停/翻页都正常（光环跟手、无残影）
 - [ ] 快捷判据：`adb logcat -s BubbleDrawer | findstr FAN_`（`FAN_RETRACT_*`、`FAN_PRESSURE_PAGE_TURN`）
 
+## A11 小窗内横屏（窗口必须落在屏幕内）
+Flyme 样式下小窗的大小 = 一个缩放系数 × ROM 自己的**未缩放**任务 bounds（`MiuiMultiWindowUtils.getPossibleBounds`）。
+这个 bounds 与方向有关：竖屏窗口宽 ≈ 短边 × ratio，横屏窗口宽 ≈ 短边 × ratio × 屏幕长宽比
+（本机 1220×2656 → 约 2.18 倍）。所以同一个「小窗大小」设置在横屏时会撑出屏幕；而 ROM 的旋转路径
+（`MiuiFreeformModeAnimation.startFreeformOrientationChangeShellTransition`）只会把窗口**平移**回屏内，**不会**缩小它。
+现在生效系数取 `min(设置值, ROM 自己 reviewFreeFormBounds 后的值)`——后者恰好是"装得下"的上限，
+竖屏时两者相等（设置值原样生效），横屏时自动收到屏幕宽度。
+- [ ] 小窗里点应用的横屏按钮（视频全屏 / 游戏）→ 窗口变成**横屏条**、居中、不超出屏幕
+      （宽 ≈ 屏幕宽 − 两侧 6dp，高 = 宽 ÷ 屏幕长宽比）
+- [ ] 再转回竖屏 → 回到原来的竖屏大小与居中位置，不需要重开小窗
+- [ ] 横屏时黑色遮罩仍铺满全屏、点窗外仍能关闭（A9 的判据不受影响）
+- [ ] 横屏时联系人条贴着窗口下边、宽度跟着窗口走，不超出屏幕
+- [ ] 直接以小窗打开一个横屏应用（游戏）→ 同样落在屏幕内（启动路径的居中同样按"装得下"的系数算）
+- [ ] 快捷判据：`adb logcat -s BubbleDrawer | findstr FREEFORM_SCALE`
+      —— `target` = 设置值，`rom` = ROM 按屏幕算出的上限，`used` = 实际生效值；
+      `clamped=true` 表示这次被上限压小了（横屏正常就是 true，竖屏应为 false）
+
 ## 贴边模式（可选，root）
 - [ ] 设置页"贴边模式"：无 su → toast 需要 root；有 su → inset=0，正上滑角落也能出扇
