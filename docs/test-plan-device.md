@@ -135,5 +135,25 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - [ ] 快捷判据：`adb logcat -s BubbleDrawer | findstr CONTACT_BAR`
       （启动时应有 `CONTACT_BAR_HOOKS_INSTALLED pipeline=true` 与 `CONTACT_BAR_NOTIF_LISTENER_ATTACHED`）
 
+## A9 Flyme 样式轻量小窗（黑色遮罩 / 窗外点击关闭）
+前置：设置页「实验性功能 → Flyme 样式轻量小窗」开启；`黑色遮罩` 与 `窗外点击关闭` 默认都开。
+遮罩是**一块**全屏 `SurfaceControl`（挂在 RootTaskDisplayArea 下、按 z 序压在目标小窗之下），
+所以控制器必须始终知道"现在哪一个小窗拥有它"——状态由 `windows`（taskId → 窗口对象）维护。
+- [ ] 开一个小窗 → 窗外变暗 35%，点窗外 → 小窗关闭（`OUTSIDE_SURFACE_TAP_DISMISS taskId=…`）
+- [ ] **两个小窗并存**：第二个小窗出现后**仍然有遮罩**，点窗外关掉的是**当前这个小窗**，
+      剩下的那个小窗**遮罩回到它身上**（日志 `DIM_TARGET … reason=TO_FRONT|APPEARED_RAW`，
+      切换时为 `DIM_FOCUS_SWITCH`，点外部关闭后是 `DIM_TARGET … reason=AFTER_OUTSIDE_CLOSE`）
+- [ ] 点另一个小窗（或拖它的把手）→ 遮罩换到它下面（`DIM_FOCUS_SWITCH`）
+- [ ] 小白条上滑 → 迷你小窗：遮罩立刻消失（`DIM_SUSPENDED reason=GESTURE_MINI`），
+      迷你恢复成普通小窗后遮罩回来（`TASK_RESTORED_TO_FREEFORM … RETAKE TAKEOVER`）
+- [ ] 关闭单个小窗的动画期间遮罩不再跟出来（`DIM_SUSPENDED reason=CLOSING`）
+- [ ] 上滑悬停 → 交还系统原生小窗：不再有遮罩（`DIM_TAKEOVER_CANCELLED reason=SWIPE_UP_HOLD`），
+      该小窗重新出现/恢复普通小窗后失效
+- [ ] 关掉 `黑色遮罩` 而保留 `窗外点击关闭`：看不见遮罩但点窗外仍能关（alpha=0 的输入层）
+- [ ] 两个开关都关 → 遮罩与点击都不生效（`DIM_HIDDEN reason=DISABLED`）
+- [ ] 快捷判据：`adb logcat -s BubbleDrawer | findstr /R "DIM_ SHOW_DIM BACKGROUND_SURFACE OUTSIDE_"`
+      —— 正常情况下每 700ms 会重新压一次遮罩（自愈），日志只在状态变化时出现
+      （`SHOW_DIM_SURFACE` / `DIM_HIDDEN` / `DIM_TARGET`），不会刷屏
+
 ## 贴边模式（可选，root）
 - [ ] 设置页"贴边模式"：无 su → toast 需要 root；有 su → inset=0，正上滑角落也能出扇

@@ -28,6 +28,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
 import android.view.WindowManager
+import com.repl.bubbledrawer.contactbar.FreeformTask
 import com.repl.bubbledrawer.xposed.RemotePrefs
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -48,7 +49,39 @@ class FlymeFreeformController(
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val vibrator = runCatching { context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator }.getOrNull()
 
-    // Active lightweight freeform task state
+    // -----------------------------------------------------------------------------------------
+    // Live 小窗 bookkeeping — main thread only; every hook funnels through [onMain].
+    //
+    // The Flyme-style mask is ONE full-screen SurfaceControl, so it can only ever sit under a single
+    // window; all of the state below exists to answer "which window owns it right now". The previous
+    // design tracked exactly one window (the last one that appeared) and never re-armed, which broke
+    // as soon as two 小窗 were open at the same time: the moment the window the mask was bound to went
+    // away, the survivor was left with no 黑色遮罩 and no 窗外点击关闭 — nothing re-showed it, because
+    // a window that is already open never "appears" again.
+    // -----------------------------------------------------------------------------------------
+
+    /** taskId → window object (richest one we have), in the order we learned about them. */
+    private val windows = LinkedHashMap<Int, Any>()
+
+    /** taskId → latch expiry: windows the mask must stay away from (closing, or mid-gesture). */
+    private val suspended = HashMap<Int, Long>()
+
+    /** The window the mask belongs to right now (null = no mask). */
+    private var maskTaskId: Int? = null
+
+    /** The user handed this window back to the ROM (上滑悬停 → 原生小窗); no mask until it changes. */
+    private var takeoverCancelledFor: Int? = null
+
+    private var tickScheduled = false
+
+    /** Last mask log line — the 700 ms tick must not repeat it on every pass. */
+    private var lastDimLog = ""
+
+    /**
+     * Shell-thread readable mirror of the mask's window. The bottom-caption gesture hooks run on the
+     * WMShell thread and only need "is the user touching the window the mask follows", so these stay
+     * plain volatile fields instead of forcing them onto the main thread.
+     */
     @Volatile var activeTaskId: Int? = null
     @Volatile var activeTaskInfo: Any? = null
     @Volatile var isTakeover: Boolean = false
@@ -62,12 +95,14 @@ class FlymeFreeformController(
     var gestureHoverArmed = false
     var hoverScheduled = false
 
+    /** The window whose bottom caption is being dragged (set on ACTION_DOWN, WMShell thread). */
+    @Volatile private var gestureTaskId = 0
+
     val hoverRunnable = Runnable {
         hoverScheduled = false
         gestureHoverArmed = true
         // Cancel module takeover -> window becomes standard native freeform window!
-        isTakeover = false
-        hideDim()
+        cancelTakeover("SWIPE_UP_HOLD")
         triggerHapticFeedback()
         log("SWIPE_UP_HOLD_TRIGGERED_NATIVE_FREEFORM taskId=$activeTaskId")
     }
@@ -79,17 +114,23 @@ class FlymeFreeformController(
         instance = this
         currentModule = module
         savedContext = context
+        // Outside tap (the 黑色遮罩 itself is the touch target: a trusted overlay with an input
+        // receiver registered for it, see FreeformBackgroundDecoration). Runs on the main thread.
         backgroundDecoration = FreeformBackgroundDecoration(context, classLoader, prefs) {
             val snap = RemotePrefs.read(prefs)
-            if (snap.flymeFreeformOutsideDismiss && isTakeover) {
-                val taskId = activeTaskId
-                val taskInfo = activeTaskInfo
-                if (taskId != null && taskInfo != null) {
-                    log("OUTSIDE_SURFACE_TAP_DISMISS taskId=$taskId")
-                    closeTask(taskInfo, taskId)
-                    hideDim()
-                    isTakeover = false
-                }
+            val target = currentTarget()
+            val taskId = target?.let { getTaskId(it) } ?: -1
+            if (snap.flymeFreeformOutsideDismiss && target != null && taskId > 0) {
+                log("OUTSIDE_SURFACE_TAP_DISMISS taskId=$taskId pkg=${FreeformTask.packageName(target)}")
+                suspendWindow(taskId, "OUTSIDE_CLOSE")
+                closeTask(target, taskId)
+                // 两个小窗: the survivor must keep its mask. Re-arm immediately instead of waiting for
+                // the focus change to be reported — if the ROM never reports it, the survivor would be
+                // left unclosable, which is exactly the reported bug.
+                maskTaskId = null
+                refreshMask("AFTER_OUTSIDE_CLOSE")
+            } else {
+                log("OUTSIDE_SURFACE_TAP_IGNORED dismiss=${snap.flymeFreeformOutsideDismiss} target=${target != null}")
             }
         }
     }
@@ -99,11 +140,14 @@ class FlymeFreeformController(
     }
 
     fun dispose() {
-        if (hoverScheduled) {
-            handler.removeCallbacks(hoverRunnable)
-            hoverScheduled = false
-        }
+        gestureReset()
         hideDim()
+        windows.clear()
+        suspended.clear()
+        maskTaskId = null
+        takeoverCancelledFor = null
+        handler.removeCallbacks(dimTick)
+        tickScheduled = false
         activeTaskId = null
         activeTaskInfo = null
         isTakeover = false
@@ -114,91 +158,380 @@ class FlymeFreeformController(
     }
 
     // -------------------------------------------------------------------------
-    // Outside-tap dismiss & Dimming mask
+    // Window bookkeeping: which 小窗 owns the 黑色遮罩
     // -------------------------------------------------------------------------
 
-    fun onTaskAppeared(taskInfo: Any) {
-        val snap = RemotePrefs.read(prefs)
-        if (!snap.flymeFreeformEnabled) return
+    /** Run [block] on the main thread — all window state above is main-thread only. */
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else handler.post(block)
+    }
+
+    /** A 小窗 appeared (`MiuiFreeformModeTaskRepository.onTaskAppeared`). */
+    fun onTaskAppeared(taskInfo: Any) = onMain {
+        // The bookkeeping runs even while the Flyme-style takeover is switched off, so that turning the
+        // setting on picks up a 小窗 that is already open (the tick re-evaluates within 700 ms).
+        val taskId = rememberWindow(taskInfo)
+        if (taskId <= 0) return@onMain
+        log("TASK_APPEARED taskId=$taskId bounds=${getVisualBounds(taskInfo)}")
+        // A brand new window is the one the user is looking at: it takes the mask.
+        focusWindow(taskInfo, "APPEARED")
+        // The window may need a frame or two before it has a leash; the tick would catch it, this
+        // retry just makes the mask appear immediately.
+        handler.postDelayed({ onMain { refreshMask("APPEARED_RETRY") } }, 200L)
+    }
+
+    /**
+     * The raw shell signal: `MultiTaskingTaskRepository.onTaskAppeared(RunningTaskInfo, leash)`.
+     *
+     * Deliberately independent of the freeform pipeline above — that one only announces a window after
+     * an "open transition ready" (`MultiTaskingTaskRepository.updateFreeformTaskInfo`), so a second
+     * 小窗 can be created without ever producing `onTaskAppeared(MiuiFreeformModeTaskInfo)`. This hook
+     * sees every task with `windowingMode == 5` the moment the shell gets it, which is what makes the
+     * mask work for the second window.
+     */
+    fun onRawTaskAppeared(taskId: Int, leash: SurfaceControl?, repository: Any?) = onMain {
+        if (taskId <= 0) return@onMain
+        if (windows.containsKey(taskId) || suspended.containsKey(taskId)) return@onMain
+        val info = resolveWindow(taskId, repository)
+            ?: leash?.takeIf { it.isValid }?.let { RawWindow(it, taskId) }
+            ?: return@onMain
+        rememberWindow(info)
+        log("TASK_APPEARED_RAW taskId=$taskId leash=${leash != null}")
+        focusWindow(info, "APPEARED_RAW")
+    }
+
+    fun onTaskVanished(taskId: Int) = onMain {
+        windows.remove(taskId)
+        suspended.remove(taskId)
+        if (takeoverCancelledFor == taskId) takeoverCancelledFor = null
+        if (maskTaskId == taskId) maskTaskId = null
+        log("TASK_VANISHED taskId=$taskId remaining=${windows.keys}")
+        refreshMask("VANISHED")
+        if (windows.isEmpty()) backgroundDecoration?.release()
+    }
+
+    /** A 小窗 became the focused one (`MultiTaskingTaskRepository.updateFreeformTaskToTop`). */
+    fun onTaskToFront(taskId: Int, repository: Any?) = onMain {
+        if (taskId <= 0) return@onMain
+        val info = resolveWindow(taskId, repository)
+        if (info == null) {
+            // A focused window we can neither remember nor resolve: the ROM's repository knows nothing
+            // about it (its `needSkip` filtered it out). Keep whatever the mask has — dropping it here
+            // is exactly the "第二个小窗没有遮罩" failure — but do not re-anchor to something unknown.
+            log("DIM_TARGET_UNRESOLVED taskId=$taskId")
+            refreshMask("TO_FRONT_UNRESOLVED")
+            return@onMain
+        }
+        rememberWindow(info)
+        if (maskTaskId != null && maskTaskId != taskId) {
+            log(
+                "DIM_FOCUS_SWITCH taskId=$taskId pkg=${FreeformTask.packageName(info)} " +
+                    "from=$maskTaskId",
+            )
+        }
+        focusWindow(info, "TO_FRONT")
+    }
+
+    /** The window the user is manipulating right now (拖拽/拉伸手势). */
+    fun onTaskFocused(taskInfo: Any) = onMain {
+        val taskId = rememberWindow(taskInfo)
+        if (taskId <= 0) return@onMain
+        if (maskTaskId != taskId && FreeformTask.isPlain(taskInfo)) {
+            log("DIM_FOCUS_SWITCH taskId=$taskId pkg=${FreeformTask.packageName(taskInfo)} reason=GESTURE")
+            focusWindow(taskInfo, "GESTURE")
+        } else {
+            refreshMask("GESTURE")
+        }
+    }
+
+    fun onTaskModeChanged(taskInfo: Any, oldMode: Int, newMode: Int) = onMain {
+        val taskId = rememberWindow(taskInfo)
+        if (taskId <= 0) return@onMain
+        log("TASK_MODE_CHANGED taskId=$taskId old=$oldMode new=$newMode")
+
+        if (newMode == FreeformTask.MODE_NORMAL) {
+            // 迷你/贴边 → 普通小窗: the mask comes back for it.
+            log("TASK_RESTORED_TO_FREEFORM taskId=$taskId oldMode=$oldMode -> RETAKE TAKEOVER")
+            takeoverCancelledFor = null
+            suspended.remove(taskId)
+            gestureReset()
+            focusWindow(taskInfo, "MODE_NORMAL")
+            handler.postDelayed({ onMain { refreshMask("MODE_NORMAL_RETRY") } }, 350L)
+        } else {
+            // 迷你 / 贴边 / 退出中: this window must not carry the mask.
+            if (maskTaskId == taskId) maskTaskId = null
+            refreshMask("MODE_$newMode")
+        }
+    }
+
+    fun onTaskClosing(taskId: Int) = onMain {
+        suspendWindow(taskId, "CLOSING")
+    }
+
+    /** The user is grabbing this window's bottom caption: it becomes the mask's window. */
+    fun onWindowInteracting(taskInfo: Any) = onMain {
+        val taskId = rememberWindow(taskInfo)
+        if (taskId <= 0) return@onMain
+        if (activeTaskId != taskId || !isTakeover) {
+            activeTaskId = taskId
+            activeTaskInfo = taskInfo
+            isTakeover = true
+        }
+    }
+
+    /** Remember a window (and keep the richer object when we learn about the same one twice). */
+    private fun rememberWindow(taskInfo: Any): Int {
+        val taskId = getTaskId(taskInfo)
+        if (taskId <= 0) return -1
+        if (windows.size > MAX_TRACKED_WINDOWS) windows.clear()
+        val previous = windows[taskId]
+        val previousIsRaw = previous != null && FreeformTask.mode(previous) == FreeformTask.MODE_NONE
+        if (previous == null || (previousIsRaw && FreeformTask.mode(taskInfo) != FreeformTask.MODE_NONE)) {
+            windows[taskId] = taskInfo
+        }
+        return taskId
+    }
+
+    /**
+     * The object behind a task id, asking the ROM's own repository when we have never seen it:
+     * `getMiuiFreeformTaskInfo` (mode/geometry aware) first, then `getMultiTaskingTaskInfo`, which
+     * always exists for a freeform task and still carries the leash the mask is layered against.
+     */
+    private fun resolveWindow(taskId: Int, repository: Any?): Any? {
+        windows[taskId]?.let { return it }
+        val repo = repository ?: getMultiTaskingTaskRepository()
+        val rich = callWithTaskId(repo, "getMiuiFreeformTaskInfo", taskId)
+        if (rich != null) return rich
+        return callWithTaskId(repo, "getMultiTaskingTaskInfo", taskId)
+    }
+
+    private fun callWithTaskId(target: Any?, name: String, taskId: Int): Any? {
+        if (target == null) return null
+        return runCatching {
+            target.javaClass.getMethod(name, Int::class.javaPrimitiveType).invoke(target, taskId)
+        }.getOrNull()
+    }
+
+    /** `MiuiFreeformModeController.mMultiTaskingTaskRepository` — the freeform task state owner. */
+    private fun getMultiTaskingTaskRepository(): Any? {
+        savedRepository?.let { return it }
+        val controller = getMiuiFreeformModeController() ?: return null
+        val repo = runCatching {
+            controller.javaClass.getDeclaredField("mMultiTaskingTaskRepository")
+                .apply { isAccessible = true }.get(controller)
+        }.getOrNull() ?: return null
+        savedRepository = repo
+        return repo
+    }
+
+    /** A window known only by task id + leash (the repository could not hand us the real objects). */
+    private class RawWindow(private val surface: SurfaceControl, private val id: Int) {
+        // Deliberately methods, not properties: `getLeash`/`getTaskId` are what FreeformTask looks up.
+        fun getLeash(): SurfaceControl = surface
+        fun getTaskId(): Int = id
+        /** Always a freeform task: the hook that creates this only fires for `windowingMode == 5`. */
+        fun getWindowingMode(): Int = FreeformTask.WINDOWING_MODE_FREEFORM
+    }
+
+    // -------------------------------------------------------------------------
+    // Mask lifecycle
+    // -------------------------------------------------------------------------
+
+    /** Point the mask at a window and show it (main thread). */
+    private fun focusWindow(taskInfo: Any, reason: String) {
         val taskId = getTaskId(taskInfo)
         if (taskId <= 0) return
-
+        // A suspension (closing / mid-transition) is deliberately NOT cleared here: an incidental event
+        // during a close animation must not put the mask back over a window that is going away. It
+        // expires on its own (SUSPEND_MS) or is cleared by an explicit 普通小窗 restore.
+        maskTaskId = taskId
         activeTaskId = taskId
         activeTaskInfo = taskInfo
         isTakeover = true
+        log(
+            "DIM_TARGET taskId=$taskId reason=$reason pkg=${FreeformTask.packageName(taskInfo)} " +
+                "mode=${FreeformTask.mode(taskInfo)}",
+        )
+        refreshMask(reason)
+    }
+
+    /**
+     * Bring the mask in line with reality: show it under the window that should own it, hide it when
+     * there is none. Called on every window event *and* from the 700 ms tick, so a missed event (or a
+     * window the freeform pipeline never announced) cannot leave the user without a mask.
+     */
+    private fun refreshMask(reason: String) {
+        try {
+            applyMaskState(reason)
+        } finally {
+            // Keep the self-heal alive for as long as any 小窗 is around, whichever way we exited.
+            if (windows.isNotEmpty()) scheduleTick()
+        }
+    }
+
+    private fun applyMaskState(reason: String) {
+        val snap = RemotePrefs.read(prefs)
+        if (!snap.flymeFreeformEnabled || (!snap.flymeFreeformDimBg && !snap.flymeFreeformOutsideDismiss)) {
+            clearMask("DISABLED")
+            return
+        }
+        pruneSuspended()
+        pruneDeadWindows()
+        val target = currentTarget()
+        if (target == null) {
+            clearMask("NO_WINDOW")
+            return
+        }
+        val taskId = getTaskId(target)
+        if (takeoverCancelledFor == taskId) {
+            clearMask("TAKEOVER_CANCELLED")
+            return
+        }
+        maskTaskId = taskId
+        activeTaskId = taskId
+        activeTaskInfo = target
+        isTakeover = true
+        showDim(target)
+    }
+
+    /**
+     * Forget windows whose surface is already gone. The vanish signal travels the same freeform
+     * pipeline the appear signal does, so a window that was never announced there would otherwise stay
+     * in the map forever and keep the mask pointed at a dead leash.
+     */
+    private fun pruneDeadWindows() {
+        if (windows.isEmpty()) return
+        val dead = windows.entries.filter { (id, info) ->
+            val leash = FreeformTask.leash(info)
+            leash != null && !leash.isValid && suspended.containsKey(id)
+        }
+        if (dead.isEmpty()) return
+        dead.forEach { (id, _) ->
+            windows.remove(id)
+            suspended.remove(id)
+            if (maskTaskId == id) maskTaskId = null
+        }
+        logDimOnce("DIM_WINDOW_PRUNED taskIds=${dead.map { it.key }}")
+    }
+
+    /** The window that should own the mask: the focused one, else the newest usable one. */
+    private fun currentTarget(): Any? {
+        maskTaskId?.let { id -> windows[id]?.let { if (isTargetable(id, it)) return it } }
+        val entries = windows.entries.toList()
+        for (i in entries.indices.reversed()) {
+            val (id, info) = entries[i]
+            if (isTargetable(id, info)) return info
+        }
+        return null
+    }
+
+    private fun isTargetable(taskId: Int, info: Any): Boolean {
+        if (suspended.containsKey(taskId)) return false
+        // A window whose surface is already gone must not be anchored to (the ROM may not have told us
+        // it vanished yet); the entry itself stays until the tick can prove every window is gone.
+        if (!isLive(info)) return false
+        return FreeformTask.isPlain(info)
+    }
+
+    /** False only once the window's surface has really been released (unknown leashes count as live). */
+    private fun isLive(info: Any): Boolean {
+        val leash = FreeformTask.leash(info) ?: return true
+        return leash.isValid
+    }
+
+    private fun clearMask(reason: String) {
+        if (maskTaskId != null || isTakeover) logDimOnce("DIM_HIDDEN reason=$reason")
+        maskTaskId = null
+        isTakeover = false
+        hideDim()
+    }
+
+    /** Keep the mask away from a window for a while (it is closing, or mid-transition). */
+    private fun suspendWindow(taskId: Int?, reason: String) {
+        if (taskId == null || taskId <= 0) return
+        onMain {
+            suspended[taskId] = SystemClock.uptimeMillis() + SUSPEND_MS
+            if (maskTaskId == taskId) maskTaskId = null
+            log("DIM_SUSPENDED taskId=$taskId reason=$reason")
+            isTakeover = false
+            hideDim()
+        }
+    }
+
+    /** Suspend the window the current bottom-caption gesture was performed on. */
+    private fun suspendGesture(reason: String) {
+        suspendWindow(if (gestureTaskId > 0) gestureTaskId else activeTaskId, reason)
+    }
+
+    /** 上滑悬停: the user wants the ROM's own 小窗 — no mask for this window any more. */
+    private fun cancelTakeover(reason: String) {
+        onMain {
+            val taskId = activeTaskId
+            takeoverCancelledFor = taskId
+            maskTaskId = null
+            isTakeover = false
+            log("DIM_TAKEOVER_CANCELLED taskId=$taskId reason=$reason")
+            hideDim()
+        }
+    }
+
+    private fun pruneSuspended() {
+        val now = SystemClock.uptimeMillis()
+        suspended.entries.removeAll { it.value < now }
+    }
+
+    private fun gestureReset() {
         gestureHoverArmed = false
         if (hoverScheduled) {
             handler.removeCallbacks(hoverRunnable)
             hoverScheduled = false
         }
-        log("TASK_APPEARED taskId=$taskId bounds=${getVisualBounds(taskInfo)}")
-
-        handler.post {
-            if (snap.flymeFreeformDimBg || snap.flymeFreeformOutsideDismiss) {
-                showDim(taskInfo)
-            }
-        }
-        handler.postDelayed({
-            if (isTakeover && activeTaskId == taskId) {
-                if (snap.flymeFreeformDimBg || snap.flymeFreeformOutsideDismiss) {
-                    showDim(taskInfo)
-                }
-            }
-        }, 200L)
     }
 
-    fun onTaskVanished(taskId: Int) {
-        if (activeTaskId == taskId) {
-            log("TASK_VANISHED taskId=$taskId")
-            activeTaskId = null
-            activeTaskInfo = null
-            isTakeover = false
-            hideDim()
-            backgroundDecoration?.release()
+    /**
+     * The 700 ms self-heal: re-asserts the mask while any 小窗 is alive, so a layer the ROM re-ordered,
+     * a leash that was not ready yet, or a focus change nobody reported cannot leave it missing.
+     */
+    private fun scheduleTick() {
+        if (tickScheduled) return
+        tickScheduled = true
+        handler.postDelayed(dimTick, DIM_TICK_MS)
+    }
+
+    private val dimTick = object : Runnable {
+        override fun run() {
+            tickScheduled = false
+            refreshMask("TICK")
+            if (windows.isEmpty()) return
+            if (windows.values.any { isLive(it) }) {
+                scheduleTick()
+            } else {
+                // Every remembered window's surface is gone and the ROM never said so: drop the map so
+                // the next 小窗 starts from a clean slate (and the tick stops burning frames).
+                logDimOnce("DIM_WINDOWS_CLEARED taskIds=${windows.keys}")
+                windows.clear()
+                suspended.clear()
+                maskTaskId = null
+                clearMask("NO_LIVE_WINDOW")
+            }
         }
     }
 
-    fun onTaskModeChanged(taskInfo: Any, oldMode: Int, newMode: Int) {
-        val taskId = getTaskId(taskInfo)
-        if (taskId <= 0) return
-
-        if (newMode == 0) {
-            val snap = RemotePrefs.read(prefs)
-            if (snap.flymeFreeformEnabled) {
-                log("TASK_RESTORED_TO_FREEFORM taskId=$taskId oldMode=$oldMode -> RETAKE TAKEOVER")
-                activeTaskId = taskId
-                activeTaskInfo = taskInfo
-                isTakeover = true
-                gestureHoverArmed = false
-                if (hoverScheduled) {
-                    handler.removeCallbacks(hoverRunnable)
-                    hoverScheduled = false
-                }
-                handler.post {
-                    if (snap.flymeFreeformDimBg || snap.flymeFreeformOutsideDismiss) {
-                        showDim(taskInfo)
-                    }
-                }
-                handler.postDelayed({
-                    if (isTakeover && activeTaskId == taskId) {
-                        if (snap.flymeFreeformDimBg || snap.flymeFreeformOutsideDismiss) {
-                            showDim(taskInfo)
-                        }
-                    }
-                }, 350L)
-            }
-        } else if (activeTaskId == taskId) {
-            log("TASK_MODE_CHANGED taskId=$taskId oldMode=$oldMode newMode=$newMode -> EXIT TAKEOVER")
-            isTakeover = false
-            hideDim()
-        }
+    /** Log a mask line only when it differs from the previous one (the tick runs forever). */
+    private fun logDimOnce(message: String) {
+        if (message == lastDimLog) return
+        lastDimLog = message
+        log(message)
     }
 
     // -------------------------------------------------------------------------
     // Bottom Caption Gestures (Action delegates)
     // -------------------------------------------------------------------------
 
-    fun onBottomCaptionDown(y: Float) {
+    fun onBottomCaptionDown(y: Float, taskId: Int) {
+        // Recorded synchronously (this runs on the WMShell thread): a gesture transition must suspend
+        // the window it was performed on, not whatever the main thread last decided the mask follows.
+        gestureTaskId = taskId
         gestureDownY = y
         gestureDownTime = SystemClock.uptimeMillis()
         gestureHoverArmed = false
@@ -236,8 +569,8 @@ class FlymeFreeformController(
             } finally {
                 sForceRebound = false
                 gestureHoverArmed = false
-                isTakeover = false
-                hideDim()
+                // The user asked for the ROM's own 小窗: no mask for this window from now on.
+                cancelTakeover("HOVER_REBOUND")
             }
         }
 
@@ -248,8 +581,9 @@ class FlymeFreeformController(
                 proceed()
             } finally {
                 sForceMiniTransition = false
-                isTakeover = false
-                hideDim()
+                // 迷你小窗 carries no mask: keep it away while the transition runs (the mode change
+                // that follows settles it for good).
+                suspendGesture("GESTURE_MINI")
             }
         }
 
@@ -260,8 +594,7 @@ class FlymeFreeformController(
                 proceed()
             } finally {
                 sForceFullscreenTransition = false
-                isTakeover = false
-                hideDim()
+                suspendGesture("GESTURE_FULLSCREEN")
             }
         }
 
@@ -473,6 +806,7 @@ class FlymeFreeformController(
     }
 
     fun getTaskLeash(taskInfo: Any): SurfaceControl? {
+        FreeformTask.leash(taskInfo)?.let { return it }
         return runCatching {
             taskInfo.javaClass.getMethod("getLeash").invoke(taskInfo) as? SurfaceControl
         }.getOrNull() ?: runCatching {
@@ -487,25 +821,36 @@ class FlymeFreeformController(
     // SurfaceControl Background Decoration & Outside Tap Interception
     // -------------------------------------------------------------------------
 
-    fun showDim(taskInfo: Any) {
+    /**
+     * Put the mask under [taskInfo]'s window. Returns false when the window's leash is not available
+     * yet — the 700 ms tick retries, which is what makes this reliable for a window that is still
+     * being created.
+     */
+    fun showDim(taskInfo: Any): Boolean {
         val snap = RemotePrefs.read(prefs)
         if (!snap.flymeFreeformDimBg && !snap.flymeFreeformOutsideDismiss) {
             hideDim()
-            return
+            return false
         }
 
         val organizer = getRootTaskDisplayAreaOrganizer()
         val leash = getTaskLeash(taskInfo)
         if (organizer == null || leash == null) {
-            log("SHOW_DIM_DEFERRED organizer=${organizer != null} leash=${leash != null}")
-            return
+            logDimOnce(
+                "SHOW_DIM_DEFERRED taskId=${getTaskId(taskInfo)} organizer=${organizer != null} " +
+                    "leash=${leash != null}",
+            )
+            return false
         }
 
         val blurRadius = 0
         val dimAlpha = if (snap.flymeFreeformDimBg) 0.35f else 0.0f
         val allowOutsideDismiss = snap.flymeFreeformOutsideDismiss
 
-        log("SHOW_DIM_SURFACE blur=0 alpha=$dimAlpha outsideDismiss=$allowOutsideDismiss")
+        logDimOnce(
+            "SHOW_DIM_SURFACE taskId=${getTaskId(taskInfo)} blur=0 alpha=$dimAlpha " +
+                "outsideDismiss=$allowOutsideDismiss",
+        )
         if (Looper.myLooper() == Looper.getMainLooper()) {
             backgroundDecoration?.show(organizer, leash, blurRadius, dimAlpha, allowOutsideDismiss)
         } else {
@@ -513,6 +858,7 @@ class FlymeFreeformController(
                 backgroundDecoration?.show(organizer, leash, blurRadius, dimAlpha, allowOutsideDismiss)
             }
         }
+        return true
     }
 
     fun hideDim() {
@@ -535,6 +881,25 @@ class FlymeFreeformController(
         private val transaction = SurfaceControl.Transaction()
         private val windowManager = context.getSystemService(WindowManager::class.java)
         private var isReceiverRegistered = false
+
+        /** Whether the transaction currently has the layer visible (hide must stay idempotent). */
+        private var shown = false
+
+        /**
+         * `SurfaceControl.Transaction` members, resolved once. The mask is re-asserted by a 700 ms tick,
+         * so a `getMethod` per call would be pure overhead.
+         */
+        private val txSetTrustedOverlay by lazy { txMethod("setTrustedOverlay", SurfaceControl::class.java, java.lang.Boolean.TYPE) }
+        private val txSetRelativeLayer by lazy { txMethod("setRelativeLayer", SurfaceControl::class.java, SurfaceControl::class.java, java.lang.Integer.TYPE) }
+        private val txSetBlur by lazy { txMethod("setBackgroundBlurRadius", SurfaceControl::class.java, java.lang.Integer.TYPE) }
+        private val txSetColor by lazy { txMethod("setColor", SurfaceControl::class.java, FloatArray::class.java) }
+        private val txSetAlpha by lazy { txMethod("setAlpha", SurfaceControl::class.java, java.lang.Float.TYPE) }
+        private val txShow by lazy { txMethod("show", SurfaceControl::class.java) }
+        private val txHide by lazy { txMethod("hide", SurfaceControl::class.java) }
+        private val txRemove by lazy { txMethod("remove", SurfaceControl::class.java) }
+
+        private fun txMethod(name: String, vararg params: Class<*>): java.lang.reflect.Method? =
+            runCatching { SurfaceControl.Transaction::class.java.getMethod(name, *params) }.getOrNull()
 
         private var touchDownX = 0f
         private var touchDownY = 0f
@@ -564,36 +929,23 @@ class FlymeFreeformController(
                 attachMethod.isAccessible = true
                 attachMethod.invoke(organizer, 0, builder)
                 surfaceControl = builder.build()
+                shown = false
                 log("BACKGROUND_SURFACE_CREATED")
             }
 
             val sc = surfaceControl ?: return
             runCatching {
-                runCatching {
-                    transaction.javaClass.getMethod("setTrustedOverlay", SurfaceControl::class.java, Boolean::class.javaPrimitiveType)
-                        .invoke(transaction, sc, true)
-                }
-                runCatching {
-                    transaction.javaClass.getMethod("setRelativeLayer", SurfaceControl::class.java, SurfaceControl::class.java, Int::class.javaPrimitiveType)
-                        .invoke(transaction, sc, leash, -1)
-                }
-                runCatching {
-                    transaction.javaClass.getMethod("setBackgroundBlurRadius", SurfaceControl::class.java, Int::class.javaPrimitiveType)
-                        .invoke(transaction, sc, 0)
-                }
-                runCatching {
-                    transaction.javaClass.getMethod("setColor", SurfaceControl::class.java, FloatArray::class.java)
-                        .invoke(transaction, sc, floatArrayOf(0f, 0f, 0f))
-                }
-                runCatching {
-                    transaction.javaClass.getMethod("setAlpha", SurfaceControl::class.java, Float::class.javaPrimitiveType)
-                        .invoke(transaction, sc, dimAlpha)
-                }
-                runCatching {
-                    transaction.javaClass.getMethod("show", SurfaceControl::class.java).invoke(transaction, sc)
-                }
+                runCatching { txSetTrustedOverlay?.invoke(transaction, sc, true) }
+                // Just below the window the mask belongs to. With two 小窗 open this is re-applied
+                // whenever the focus moves (and every tick), so the mask always sits under the window
+                // the user is working with instead of the one it was first created for.
+                runCatching { txSetRelativeLayer?.invoke(transaction, sc, leash, -1) }
+                runCatching { txSetBlur?.invoke(transaction, sc, blurRadius) }
+                runCatching { txSetColor?.invoke(transaction, sc, floatArrayOf(0f, 0f, 0f)) }
+                runCatching { txSetAlpha?.invoke(transaction, sc, dimAlpha) }
+                runCatching { txShow?.invoke(transaction, sc) }
                 transaction.apply()
-                log("BACKGROUND_SURFACE_SHOWN dimAlpha=$dimAlpha")
+                shown = true
             }.onFailure {
                 log("BACKGROUND_SURFACE_SHOW_FAILED", it)
             }
@@ -609,12 +961,14 @@ class FlymeFreeformController(
             lastTapUpTime = 0L
             val sc = surfaceControl ?: return
             unregisterInputReceiver(sc)
+            if (!shown) return
             runCatching {
-                runCatching {
-                    transaction.javaClass.getMethod("hide", SurfaceControl::class.java).invoke(transaction, sc)
-                }
+                runCatching { txHide?.invoke(transaction, sc) }
                 transaction.apply()
+                shown = false
                 log("BACKGROUND_SURFACE_HIDDEN")
+            }.onFailure {
+                log("BACKGROUND_SURFACE_HIDE_FAILED", it)
             }
         }
 
@@ -623,12 +977,13 @@ class FlymeFreeformController(
             val sc = surfaceControl ?: return
             unregisterInputReceiver(sc)
             runCatching {
-                runCatching {
-                    transaction.javaClass.getMethod("remove", SurfaceControl::class.java).invoke(transaction, sc)
-                }
+                runCatching { txRemove?.invoke(transaction, sc) }
                 transaction.apply()
                 surfaceControl = null
+                shown = false
                 log("BACKGROUND_SURFACE_RELEASED")
+            }.onFailure {
+                log("BACKGROUND_SURFACE_RELEASE_FAILED", it)
             }
         }
 
@@ -679,11 +1034,13 @@ class FlymeFreeformController(
                     SurfaceControl::class.java,
                 )
                 unregisterMethod.invoke(windowManager, sc)
-                isReceiverRegistered = false
                 log("INPUT_RECEIVER_UNREGISTERED")
             }.onFailure {
                 log("INPUT_RECEIVER_UNREGISTER_FAILED", it)
             }
+            // Either the receiver is gone or WMS never had it for this surface; in both cases the layer
+            // is no longer listening, so a stale `true` here would silently drop the next tap.
+            isReceiverRegistered = false
         }
 
         private fun handleInputEvent(event: InputEvent?): Boolean {
@@ -791,6 +1148,23 @@ class FlymeFreeformController(
         const val TAG = "BubbleDrawer"
         @Volatile var instance: FlymeFreeformController? = null
 
+        /** Bound on the remembered window map (the ROM itself allows two 小窗). */
+        private const val MAX_TRACKED_WINDOWS = 4
+
+        /**
+         * How long a window is left out of mask targeting after a deliberate hide (closing, or a
+         * mini/fullscreen transition). Long enough to cover the animation, short enough that an
+         * aborted transition cannot leave the mask off forever.
+         */
+        private const val SUSPEND_MS = 1200L
+
+        /**
+         * Mask re-assert interval. This is the self-healing part: a layer the ROM re-ordered, a leash
+         * that was not ready when the window appeared, or a focus change nobody reported all get fixed
+         * within one tick instead of leaving the user without 黑色遮罩 / 窗外点击关闭.
+         */
+        private const val DIM_TICK_MS = 700L
+
         /**
          * Freeform state fan-out for consumers that are independent of the Flyme-style takeover
          * (today: the floating contact bar). Set by `SystemUiHookInstaller` right after this
@@ -807,6 +1181,9 @@ class FlymeFreeformController(
         @Volatile var savedExecutor: Executor? = null
         @Volatile var savedOrganizer: Any? = null
         @Volatile var savedContext: Context? = null
+
+        /** `MiuiFreeformModeController.mMultiTaskingTaskRepository` — task id → window object. */
+        @Volatile var savedRepository: Any? = null
         @Volatile var sForceMiniTransition = false
         @Volatile var sForceFullscreenTransition = false
         @Volatile var sForceRebound = false
@@ -894,6 +1271,7 @@ class FlymeFreeformController(
             hookFreeformScale(module, prefs, classLoader)
             hookBoundsCentering(module, prefs, classLoader)
             hookTaskRepository(module, classLoader)
+            hookRawTaskAppeared(module, classLoader)
             hookVelocityMonitor(module, classLoader)
             hookMiniBottomUpLimit(module, classLoader)
             hookTopCaptionMove(module, classLoader)
@@ -910,9 +1288,12 @@ class FlymeFreeformController(
          * String)` is called for every freeform focus gain (`onTaskInfoChanged` :509-512 when
          * `runningTaskInfo.isFocused`) and from `MiuiFreeformModeController` `moveToFront` (:2800).
          *
-         * Consumers that draw around one specific window (the contact bar) need this to know both that
-         * another window took focus — hide — and that theirs got it back, which a plain tap otherwise
-         * never reports.
+         * Two consumers: the contact bar (it must know both that another window took focus — hide — and
+         * that its own got it back, which a plain tap never reports), and the 黑色遮罩, which has to
+         * follow the focused window. The repository itself comes along because it is the only place
+         * that can turn a bare task id back into a window object (`getMiuiFreeformTaskInfo` /
+         * `getMultiTaskingTaskInfo`) — the mask needs that leash for a 小窗 whose appearance the
+         * freeform pipeline never announced.
          */
         private fun hookTaskToFront(
             module: XposedModule,
@@ -930,12 +1311,65 @@ class FlymeFreeformController(
                             .setId("bubbledrawer.freeform.to_front")
                             .intercept { chain ->
                                 val taskId = (chain.args.firstOrNull() as? Number)?.toInt() ?: -1
-                                if (taskId > 0) freeformObserver?.onFreeformTaskToFront(taskId)
+                                if (taskId > 0) {
+                                    val repository = chain.thisObject
+                                    if (repository != null && savedRepository == null) savedRepository = repository
+                                    instance?.onTaskToFront(taskId, repository)
+                                    freeformObserver?.onFreeformTaskToFront(taskId)
+                                }
                                 chain.proceed()
                             }
                     }
                 }
             log("HOOK_INSTALLED_MultiTaskingTaskRepository.updateFreeformTaskToTop")
+        }
+
+        /**
+         * Every 小窗 the shell ever sees: `MultiTaskingTaskRepository.onTaskAppeared(RunningTaskInfo,
+         * SurfaceControl)` (called from `MultiTaskingTaskListener`, i.e. straight from
+         * `ShellTaskOrganizer`).
+         *
+         * This is the safety net behind [hookTaskRepository]: that one only announces a window once the
+         * freeform pipeline has built a `MiuiFreeformModeTaskInfo` for it, which happens on an "open
+         * transition ready" — so opening a *second* 小窗 while one is already up can leave the mask
+         * still pointing at the first window. Here nothing but `windowingMode == 5` is required, and
+         * the leash comes with the call.
+         */
+        private fun hookRawTaskAppeared(
+            module: XposedModule,
+            classLoader: ClassLoader,
+        ) {
+            val cls = runCatching {
+                classLoader.loadClass("com.android.wm.shell.multitasking.common.taskmanager.MultiTaskingTaskRepository")
+            }.getOrNull() ?: return
+
+            var installed = 0
+            cls.declaredMethods
+                .filter { it.name == "onTaskAppeared" && it.parameterCount == 2 }
+                .forEach { m ->
+                    runCatching {
+                        module.hook(m)
+                            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                            .setId("bubbledrawer.freeform.raw_appeared")
+                            .intercept { chain ->
+                                val result = chain.proceed()
+                                val taskInfo = chain.args.getOrNull(0)
+                                val taskId = taskInfo?.let { runCatching {
+                                    it.javaClass.getField("taskId").getInt(it)
+                                }.getOrNull() } ?: -1
+                                if (taskId > 0 && FreeformTask.windowingMode(taskInfo) == FreeformTask.WINDOWING_MODE_FREEFORM) {
+                                    instance?.onRawTaskAppeared(
+                                        taskId,
+                                        chain.args.getOrNull(1) as? SurfaceControl,
+                                        chain.thisObject,
+                                    )
+                                }
+                                result
+                            }
+                        installed++
+                    }
+                }
+            log("HOOK_INSTALLED_MultiTaskingTaskRepository.onTaskAppeared count=$installed")
         }
 
         /**
@@ -1059,7 +1493,10 @@ class FlymeFreeformController(
                                 .setId("bubbledrawer.freeform.exit.${name.substringAfterLast('.')}.${m.parameterCount}")
                                 .intercept { chain ->
                                     val taskId = (chain.args.firstOrNull() as? Number)?.toInt() ?: -1
-                                    if (taskId > 0) freeformObserver?.onFreeformTaskClosing(taskId)
+                                    if (taskId > 0) {
+                                        instance?.onTaskClosing(taskId)
+                                        freeformObserver?.onFreeformTaskClosing(taskId)
+                                    }
                                     chain.proceed()
                                 }
                             installed++
@@ -1073,8 +1510,9 @@ class FlymeFreeformController(
          * "This is the window the user is working on" — `MiuiFreeformModeResizeHandler.handleResize`
          * carries the `MiuiFreeformModeTaskInfo` on every resize event (actionMode 0 = down).
          *
-         * Two consumers: the contact bar re-targets to that window (with two 小窗 open, the bar must
-         * sit under the one being resized), and its per-frame tracking is armed for the drag.
+         * Three consumers: the contact bar re-targets to that window (with two 小窗 open, the bar must
+         * sit under the one being resized) and arms its per-frame tracking for the drag; the 黑色遮罩
+         * re-anchors to it for the same reason.
          */
         private fun hookResizeFocus(
             module: XposedModule,
@@ -1094,6 +1532,7 @@ class FlymeFreeformController(
                             val taskInfo = chain.args[2]
                             val action = (chain.args[4] as? Number)?.toInt() ?: -1
                             if (taskInfo != null && (action == 0 || action == 2)) {
+                                instance?.onTaskFocused(taskInfo)
                                 freeformObserver?.onFreeformTaskFocused(taskInfo)
                             }
                             result
@@ -1129,6 +1568,12 @@ class FlymeFreeformController(
                                     instance.javaClass.getDeclaredField("mRootTaskDisplayAreaOrganizer").apply { isAccessible = true }.get(instance)
                                 }.getOrNull()
                                 if (org != null) savedOrganizer = org
+                                // task id → window object, the fallback resolver for the mask.
+                                val repo = runCatching {
+                                    instance.javaClass.getDeclaredField("mMultiTaskingTaskRepository")
+                                        .apply { isAccessible = true }.get(instance)
+                                }.getOrNull()
+                                if (repo != null) savedRepository = repo
                                 log("CAPTURED_MiuiFreeformModeController_FROM_CONSTRUCTOR org=${org != null}")
                             }
                             result
@@ -1162,6 +1607,11 @@ class FlymeFreeformController(
                                         ctrl.javaClass.getDeclaredField("mRootTaskDisplayAreaOrganizer").apply { isAccessible = true }.get(ctrl)
                                     }.getOrNull()
                                     if (org != null) savedOrganizer = org
+                                    val repo = runCatching {
+                                        ctrl.javaClass.getDeclaredField("mMultiTaskingTaskRepository")
+                                            .apply { isAccessible = true }.get(ctrl)
+                                    }.getOrNull()
+                                    if (repo != null) savedRepository = repo
                                     log("CAPTURED_MiuiFreeformModeController_FROM_IMPL_INIT org=${org != null}")
                                 }
                             }
@@ -1513,12 +1963,9 @@ class FlymeFreeformController(
                     val taskInfo = chain.args[3]
                     val inst = instance
                     if (inst != null && taskInfo != null) {
-                        val taskId = getTaskId(taskInfo)
-                        if (taskId > 0 && (inst.activeTaskId != taskId || !inst.isTakeover)) {
-                            inst.activeTaskId = taskId
-                            inst.activeTaskInfo = taskInfo
-                            inst.isTakeover = true
-                        }
+                        // Touching a window's bottom caption makes it the one the mask follows (the
+                        // controller itself decides whether that window may carry a mask).
+                        inst.onWindowInteracting(taskInfo)
                     }
 
                     val y = (chain.args[1] as? Number)?.toFloat() ?: 0f
@@ -1530,7 +1977,7 @@ class FlymeFreeformController(
 
                     when (action) {
                         MotionEvent.ACTION_DOWN -> {
-                            inst?.onBottomCaptionDown(y)
+                            inst?.onBottomCaptionDown(y, if (taskInfo != null) getTaskId(taskInfo) else 0)
                             chain.proceed()
                         }
                         MotionEvent.ACTION_MOVE -> {

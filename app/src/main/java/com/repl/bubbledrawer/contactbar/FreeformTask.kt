@@ -1,6 +1,7 @@
 package com.repl.bubbledrawer.contactbar
 
 import android.graphics.Rect
+import android.view.SurfaceControl
 
 /**
  * Live view of the HyperOS freeform (小窗) window — the single source of truth for the
@@ -35,6 +36,9 @@ object FreeformTask {
     const val MODE_PINNED = 2
     const val MODE_MINI_PINNED = 3
 
+    /** `ActivityManager.RunningTaskInfo.getWindowingMode()` for a freeform (小窗) task. */
+    const val WINDOWING_MODE_FREEFORM = 5
+
     /** Resolved members per concrete class, so the frame loop does no lookup work. */
     private class Api(cls: Class<*>) {
         val getMode = find(cls, "getMode")
@@ -54,6 +58,8 @@ object FreeformTask {
         val isInPinMode = find(cls, "isInPinMode")
         val enterState = find(cls, "getEnterState")
         val cornerRadius = find(cls, "getCornerRadius")
+        val leash = find(cls, "getLeash")
+        val windowingMode = find(cls, "getWindowingMode")
 
         private fun find(cls: Class<*>, name: String) =
             runCatching { cls.getMethod(name) }.getOrNull()
@@ -129,6 +135,49 @@ object FreeformTask {
     fun isExiting(info: Any?): Boolean {
         val state = read(info) { it.enterState } as? Number ?: return false
         return state.toInt() == 1
+    }
+
+    /**
+     * The task's surface leash — the anchor for "just below this window" z-ordering. Null when the
+     * object cannot supply one.
+     */
+    fun leash(info: Any?): SurfaceControl? {
+        if (info == null) return null
+        (read(info) { it.leash } as? SurfaceControl)?.let { if (it.isValid) return it }
+        val taskInfo = read(info) { it.taskInfo } ?: return null
+        return runCatching { taskInfo.javaClass.getField("leash").get(taskInfo) as? SurfaceControl }
+            .getOrNull()
+            ?.takeIf { it.isValid }
+    }
+
+    /** `windowingMode` of the task ([WINDOWING_MODE_FREEFORM] = 小窗); -1 when it cannot be read. */
+    fun windowingMode(info: Any?): Int {
+        (read(info) { it.windowingMode } as? Number)?.let { return it.toInt() }
+        val taskInfo = read(info) { it.taskInfo } ?: return -1
+        return runCatching { taskInfo.javaClass.getMethod("getWindowingMode").invoke(taskInfo) as? Int }
+            .getOrNull()
+            ?: runCatching { taskInfo.javaClass.getField("windowingMode").getInt(taskInfo) }.getOrNull()
+            ?: -1
+    }
+
+    /**
+     * May the Flyme-style 黑色遮罩 cover this window (and does 窗外点击关闭 belong to it)? Only a plain
+     * 小窗: 迷你 and 贴边 states carry their own affordances, and a window that is animating away must
+     * not be targeted.
+     *
+     * A window whose mode cannot be read at all ([MODE_NONE], i.e. a bare `MultiTaskingTaskInfo`
+     * resolved from a task id — the repository hands those out for windows the freeform pipeline never
+     * announced) counts as plain when it really is a freeform task. That fallback is what keeps the
+     * *second* 小窗 covered.
+     */
+    fun isPlain(info: Any?): Boolean {
+        if (info == null) return false
+        if (isExiting(info) || !isVisible(info)) return false
+        return when (mode(info)) {
+            MODE_NORMAL -> true
+            MODE_NONE -> windowingMode(info) == WINDOWING_MODE_FREEFORM
+            else -> false
+        }
     }
 
     fun packageName(info: Any?): String? =
