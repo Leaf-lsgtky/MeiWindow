@@ -23,20 +23,35 @@ android {
                     commandLine("git", "rev-list", "--count", "HEAD")
                 }.standardOutput.asText.get().trim().toInt()
             }.getOrDefault(1)
-        versionName = providers.gradleProperty("versionName").orNull ?: "1.1.4"
+        versionName = providers.gradleProperty("versionName").orNull ?: "1.1.5"
     }
 
     buildFeatures {
         compose = true
     }
 
-    val signingKeystoreFile = System.getenv("SIGNING_STORE_FILE")?.let { file(it) }
+    // Keystore path from the environment. The workflow writes the decoded keystore at the REPO ROOT
+    // while this script runs inside app/, so a relative path has to be resolved against both — that
+    // mismatch is exactly why every earlier CI release came out with a different signature: the file
+    // was never found here, the `release` config below was never created, and line ~"signingConfig ="
+    // silently fell back to the DEBUG key (each runner generates a fresh random debug keystore).
+    val signingKeystoreEnv = System.getenv("SIGNING_STORE_FILE")?.takeIf { it.isNotBlank() }
+    val signingKeystoreFile = signingKeystoreEnv?.let { path ->
+        listOf(file(path), rootProject.file(path)).firstOrNull { it.exists() }
+    }
     val signingStorePassword = System.getenv("SIGNING_STORE_PASSWORD")
     val signingKeyAlias = System.getenv("SIGNING_KEY_ALIAS")
     val signingKeyPassword = System.getenv("SIGNING_KEY_PASSWORD")
 
+    if (signingKeystoreEnv != null) {
+        requireNotNull(signingKeystoreFile) {
+            "SIGNING_STORE_FILE=$signingKeystoreEnv not found (looked in $projectDir and ${rootProject.projectDir})"
+        }
+        require(!signingStorePassword.isNullOrEmpty()) { "SIGNING_STORE_PASSWORD is empty" }
+    }
+
     signingConfigs {
-        if (signingKeystoreFile != null && signingKeystoreFile.exists() && !signingStorePassword.isNullOrEmpty()) {
+        if (signingKeystoreFile != null && !signingStorePassword.isNullOrEmpty()) {
             create("release") {
                 storeFile = signingKeystoreFile
                 storePassword = signingStorePassword
@@ -54,6 +69,8 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // The debug fallback is only for local test builds, i.e. builds that did NOT ask for a
+            // keystore; a requested keystore that cannot be used has already failed the build above.
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }

@@ -60,11 +60,14 @@ jobs:
             echo "::error::SIGNING_KEYSTORE_BASE64 is not set."
             exit 1
           fi
-          printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.jks
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
+          ls -l "$GITHUB_WORKSPACE/release.jks"
 
       - name: Build Release APK
         env:
-          SIGNING_STORE_FILE: release.jks
+          # Absolute path: the keystore is written at the repo root while Gradle resolves a relative
+          # path against app/. A miss there used to fall back to the runner's random debug key.
+          SIGNING_STORE_FILE: ${{ github.workspace }}/release.jks
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
@@ -77,6 +80,30 @@ jobs:
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk \
              "dist/MeiWindow-${{ steps.v.outputs.tag }}.apk"
+
+      - name: Verify APK is signed with the release keystore
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          apk=$(ls dist/*.apk)
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          apksigner=$(ls -1 "$sdk"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$apksigner" ]; then
+            echo "::error::apksigner not found under $sdk"
+            exit 1
+          fi
+          want=$(keytool -list -v -keystore release.jks -storepass "$SIGNING_STORE_PASSWORD" \
+                   -alias "$SIGNING_KEY_ALIAS" | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
+          got=$("$apksigner" verify --print-certs "$apk" \
+                   | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
+          echo "keystore SHA-256: $want"
+          echo "APK      SHA-256: $got"
+          if [ -z "$want" ] || [ "$want" != "$got" ]; then
+            echo "::error::APK is NOT signed with SIGNING_KEYSTORE_BASE64 (debug-key fallback?)"
+            exit 1
+          fi
 
       - name: Verify LSPosed Metadata
         run: |

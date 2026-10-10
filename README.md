@@ -76,6 +76,18 @@
 
 构建生成的 APK 位于 `app/build/outputs/apk/release/`。
 
+**签名**：正式包由 CI 用仓库 Secrets 中的密钥签名；本地构建（不设环境变量）回落到 debug 签名。要用指定密钥本地签名：
+
+```bash
+SIGNING_STORE_FILE=/绝对路径/release.jks \
+SIGNING_STORE_PASSWORD=… SIGNING_KEY_ALIAS=… SIGNING_KEY_PASSWORD=… \
+./gradlew assembleRelease
+```
+
+只要设置了 `SIGNING_STORE_FILE`，密钥找不到、或口令为空，构建就会**直接失败**，不会静默回落到 debug 签名
+（1.1.4 及更早的发布包正是因为这种静默回落而每次签名都不同：CI 每次运行都会现生成一把随机 debug 密钥，
+详见 `v1.1.5` 说明）。CI 还会在打包后比对密钥与 APK 的证书 SHA-256，不一致直接终止发布。
+
 ---
 
 ## 🤝 鸣谢与参考
