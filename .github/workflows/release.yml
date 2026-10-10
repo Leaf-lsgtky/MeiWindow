@@ -88,16 +88,33 @@ jobs:
         run: |
           set -euo pipefail
           apk=$(ls dist/*.apk)
-          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          apksigner=$(ls -1 "$sdk"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$apksigner" ]; then
-            echo "::error::apksigner not found under $sdk"
-            exit 1
-          fi
+          norm() { tr -d ':\r' | tr 'A-F' 'a-f'; }
+
+          # Digest of the key inside the keystore ("SHA256: AB:CD:…").
           want=$(keytool -list -v -keystore release.jks -storepass "$SIGNING_STORE_PASSWORD" \
-                   -alias "$SIGNING_KEY_ALIAS" | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
-          got=$("$apksigner" verify --print-certs "$apk" \
-                   | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
+                   -alias "$SIGNING_KEY_ALIAS" | grep -oE 'SHA256: [0-9A-Fa-f:]+' | head -1 \
+                   | sed 's/.*SHA256: //' | norm)
+
+          # Digest of the APK's signer. v1 first: build-tools ship as a v1 signature here
+          # (enableV1Signing in app/build.gradle.kts) and keytool prints the same "SHA256: …"
+          # label as above, so both sides are parsed identically. apksigner is the fallback for
+          # a v2/v3-only APK; its label varies by build-tools ("Signer #1 certificate SHA-256
+          # digest:" vs "V3.0 Signer: certificate SHA-256 digest:"), hence the loose match.
+          got=$(keytool -printcert -jarfile "$apk" 2>/dev/null | grep -oE 'SHA256: [0-9A-Fa-f:]+' | head -1 \
+                   | sed 's/.*SHA256: //' | norm)
+          if [ -z "$got" ]; then
+            sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+            apksigner=$(ls -1 "$sdk"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
+            if [ -z "$apksigner" ]; then
+              echo "::error::apksigner not found under $sdk"
+              exit 1
+            fi
+            got=$("$apksigner" verify --print-certs "$apk" \
+                    | grep -oiE 'SHA-?256 digest: [0-9A-Fa-f:]+' | head -1 \
+                    | sed 's/.*digest: //' | norm)
+            "$apksigner" verify --print-certs "$apk" || true
+          fi
+
           echo "keystore SHA-256: $want"
           echo "APK      SHA-256: $got"
           if [ -z "$want" ] || [ "$want" != "$got" ]; then
