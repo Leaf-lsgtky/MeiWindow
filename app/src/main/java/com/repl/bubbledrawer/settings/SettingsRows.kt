@@ -72,17 +72,27 @@ fun ModuleStatusRow(state: SettingsUiState) {
     }
 }
 
-/** Switch row inside a grouped card (miuix SwitchPreference carries its own padding). */
+/**
+ * Switch row inside a grouped card (miuix SwitchPreference carries its own padding).
+ *
+ * [summary] is the miuix description slot — the setting's one-line explanation belongs HERE,
+ * not in a separate hint row below (docs/ui-guidelines.md: 每个设置项自带主标题 + 描述).
+ * [enabled] = false greys the row out; used for "总开关没开时子项不可用".
+ */
 @Composable
 fun SwitchRow(
     title: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    summary: String? = null,
+    enabled: Boolean = true,
 ) {
     SwitchPreference(
         title = title,
+        summary = summary,
         checked = checked,
         onCheckedChange = onCheckedChange,
+        enabled = enabled,
     )
 }
 
@@ -97,9 +107,13 @@ fun DropdownRow(
     items: List<String>,
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
+    summary: String? = null,
+    enabled: Boolean = true,
 ) {
     OverlayDropdownPreference(
         title = title,
+        summary = summary,
+        enabled = enabled,
         items = items,
         selectedIndex = selectedIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
         onSelectedIndexChange = onSelect,
@@ -119,10 +133,14 @@ fun IntSliderRow(
     max: Int,
     valueText: @Composable (Int) -> String,
     onCommit: (Int) -> Unit,
+    summary: String? = null,
+    enabled: Boolean = true,
 ) {
     var dragging by remember(value) { mutableStateOf(value.toFloat()) }
     SliderPreference(
         title = title,
+        summary = summary,
+        enabled = enabled,
         value = dragging,
         onValueChange = { dragging = it },
         valueText = valueText(Math.round(dragging).coerceIn(min, max)),
@@ -144,12 +162,16 @@ fun StepIntSliderRow(
     step: Int,
     valueText: @Composable (Int) -> String,
     onCommit: (Int) -> Unit,
+    summary: String? = null,
+    enabled: Boolean = true,
 ) {
     var dragging by remember(value) { mutableStateOf(value.toFloat()) }
     val stepCount = ((max - min) / step).coerceAtLeast(1)
     val snappedCurrent = (Math.round((dragging - min) / step.toFloat()) * step + min).coerceIn(min, max)
     SliderPreference(
         title = title,
+        summary = summary,
+        enabled = enabled,
         value = dragging,
         onValueChange = { dragging = it },
         valueText = valueText(snappedCurrent),
@@ -176,11 +198,15 @@ fun DefaultableIntSliderRow(
     defaultText: String = androidx.compose.ui.res.stringResource(com.repl.bubbledrawer.R.string.panel_default),
     valueText: @Composable (Int) -> String,
     onCommit: (Int) -> Unit,
+    summary: String? = null,
+    enabled: Boolean = true,
 ) {
     var dragging by remember(value) { mutableStateOf(value.toFloat()) }
     val currentInt = Math.round(dragging).coerceIn(min, max)
     SliderPreference(
         title = title,
+        summary = summary,
+        enabled = enabled,
         value = dragging,
         onValueChange = { dragging = it },
         valueText = if (currentInt == defaultValue) {
@@ -196,9 +222,12 @@ fun DefaultableIntSliderRow(
     )
 }
 
-/** Long hint under a slider/switch, the guidelines' "long explanatory text" row. */
+/**
+ * Section-level note (a paragraph that belongs to a whole card, not to one setting).
+ * Per-row explanations use the component's own `summary` slot instead.
+ */
 @Composable
-fun SliderHintRow(text: String) {
+fun HintRow(text: String) {
     com.repl.bubbledrawer.ui.component.SupportText(text = text)
 }
 
@@ -207,11 +236,13 @@ fun SliderHintRow(text: String) {
 fun ArrowRow(
     title: String,
     summary: String? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     ArrowPreference(
         title = title,
         summary = summary,
+        enabled = enabled,
         onClick = onClick,
     )
 }

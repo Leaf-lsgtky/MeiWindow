@@ -12,19 +12,22 @@
 
     <!-- app-specific (not part of the replica surface) -->
     <string name="enable_service">启用角落手势</string>
+    <string name="enable_service_summary">关闭后角落手势、扇形面板与更多面板都不再响应</string>
     <string name="module_connected">已连接（%1$s）</string>
     <string name="module_disconnected">未连接：请在 LSPosed 中启用本模块并勾选 SystemUI，然后重启 SystemUI</string>
     <string name="module_howto">角落手势与扇形面板运行在系统界面（SystemUI）进程内：安装本 APK 后，在 LSPosed 中启用模块、作用域勾选「系统界面」（com.android.systemui），重启 SystemUI 即生效；设置改动实时同步，无需重启。系统原生贴边返回手势不受影响——只有明确的内滑上提才会被接管。</string>
     <string name="range_title">触发区默认半径（两个轴都未单独设置时使用；px=dp×密度）</string>
-    <string name="range_bottom">沿底边范围（向内可触发的距离）</string>
-    <string name="range_edge">沿侧边范围（向上可触发的距离）</string>
-    <string name="range_hint">触发区是角落的 1/4 椭圆：两个轴可独立设置——「沿底边」决定横向能伸多长，「沿侧边」决定贴着边缘能向上够多高。两轴相等时就是普通的 1/4 圆。手指落在区内后，任何方向（含正上方）都算面板手势。</string>
+    <string name="range_bottom">沿底边范围</string>
+    <string name="range_bottom_summary">贴着底边横向能触发的长度</string>
+    <string name="range_edge">沿侧边范围</string>
+    <string name="range_edge_summary">沿侧边向上能触发的高度</string>
+    <string name="range_hint">触发区是角落的 1/4 椭圆，两轴相等时就是 1/4 圆。手指落在区内后，任何方向（含正上方）都算面板手势。</string>
     <string name="trigger_pos">触发位置</string>
     <string name="pos_both">底部双侧</string>
     <string name="pos_left">仅左角</string>
     <string name="pos_right">仅右角</string>
     <string name="freeform_toggle">小窗启动</string>
-    <string name="freeform_hint">需系统支持：开发者选项开启“桌面模式/自由窗口”，或 Android 16 桌面窗口。不支持时自动回退全屏。</string>
+    <string name="freeform_hint">应用以小窗打开；系统不支持自由窗口时回退全屏</string>
     <string name="open_manage">打开固定管理</string>
 
     <!-- miuix Compose UI -->
@@ -40,21 +43,21 @@
     <string name="fan_icon_count_6">6 个应用</string>
     <string name="fan_radius">展开扇形半径</string>
     <string name="fan_show_vibrate">滑出时振动</string>
-    <string name="fan_show_vibrate_summary">从屏幕下角滑出扇形面板的瞬间振动一下（与 Flyme 手感一致）</string>
+    <string name="fan_show_vibrate_summary">扇形开始展开的那一帧轻振一下（Flyme 手感）</string>
     <string name="fan_auto_retract">不操作自动收起</string>
     <string name="fan_auto_retract_never">不自动收起</string>
     <string name="sec_value">%1$d 秒</string>
-    <string name="fan_auto_retract_summary">扇形滑出后如果没有点选应用，超过设定时间就自动收回（默认 10 秒，Flyme 原版是 5 秒）；拖到最左（不自动收起）则一直停留，直到点选应用、点按面板外部或熄屏</string>
+    <string name="fan_auto_retract_summary">滑出后没点选就自动收回；拖到最左则一直停留</string>
     <string name="fan_icon_size">图标大小</string>
-    <string name="fan_icon_size_summary">扇形里每个应用图标的大小（默认 44 dp，与 Flyme 一致）</string>
+    <string name="fan_icon_size_summary">扇形里每个应用图标的大小</string>
     <string name="fan_icon_shape">图标形状</string>
     <string name="fan_icon_shape_circle">圆形</string>
     <string name="fan_icon_shape_rounded">系统样式圆角矩形</string>
-    <string name="fan_icon_shape_summary">圆形是 Flyme 原样；系统样式圆角矩形与桌面图标一致（按系统图标圆角裁切）</string>
+    <string name="fan_icon_shape_summary">圆形为 Flyme 原样；圆角矩形与桌面图标一致</string>
     <string name="fan_auto_fill_recommend">自动填满推荐应用</string>
-    <string name="fan_auto_fill_recommend_summary">收藏数量未达到扇形容量时，自动根据预测算法填满剩余位置</string>
+    <string name="fan_auto_fill_recommend_summary">收藏不足一页时用预测的常用应用补齐</string>
     <string name="fan_pressure_page_turn">气压重按翻页</string>
-    <string name="fan_pressure_page_turn_summary">在扇形空白处用力按压屏幕切换下一批应用（停留在图标或更多上时不触发）</string>
+    <string name="fan_pressure_page_turn_summary">在扇形空白处重按切到下一批应用</string>
     <string name="fan_pressure_sensitivity">重按灵敏度</string>
     <string name="fan_pressure_sensitivity_standard">标准 (1.2 hPa)</string>
     <string name="fan_pressure_sensitivity_sensitive">灵敏 (0.8 hPa)</string>
@@ -70,17 +73,16 @@
     <string name="global_section_title">快捷开关</string>
     <string name="category_section_title">功能设置</string>
     <string name="category_trigger">触发手势与区域</string>
-    <string name="category_trigger_summary">触发位置 · 沿底边/侧边范围 · 区域预览</string>
+    <string name="category_trigger_summary">触发位置 · 底边/侧边范围 · 区域预览</string>
     <string name="category_fan">扇形面板外观</string>
-    <string name="category_fan_summary">图标数量 · 展开半径 · 滑出振动 · 不操作自动收起 · 图标大小与形状</string>
+    <string name="category_fan_summary">图标数量与大小 · 展开半径 · 振动与自动收起</string>
     <string name="category_panel">更多应用面板</string>
     <string name="category_panel_summary">面板尺寸 · 图标与文字大小 · 外部收起方式</string>
     <string name="category_manage">收藏应用管理</string>
     <string name="category_manage_summary">排序与增删快捷启动应用</string>
     <string name="category_experimental">实验性功能</string>
     <string name="category_experimental_summary">Flyme 样式轻量小窗 · 手势转换 · 尺寸与居中</string>
-    <string name="fan_hint">从屏幕左右下角向内滑出手势，即可展开环形扇形面板；手指移至图标上方松手即可快捷启动。若启用了小窗模式，应用将以悬浮小窗打开。</string>
-    <string name="more_panel_hint">点击扇形面板上的“更多”图标即可打开更多应用面板，支持在全量应用列表中快速查找与启动。</string>
+    <string name="more_panel_hint">点击扇形面板上的「更多」图标即可打开更多应用面板，支持在全量应用列表中快速查找与启动。</string>
     <string name="search">搜索</string>
     <string name="search_hint">搜索应用</string>
     <string name="search_no_result">无搜索结果</string>
@@ -88,35 +90,36 @@
 
     <!-- Experimental: Flyme-style Lightweight Freeform -->
     <string name="exp_flyme_freeform_title">Flyme 样式轻量小窗</string>
-    <string name="exp_flyme_freeform_summary">直接打开为轻量小窗（即用即走），支持外部点击退出、小白条手势转换、窗口居中及禁止偏移</string>
+    <string name="exp_flyme_freeform_summary">小窗以轻量模式打开：点外部退出、小白条手势转换</string>
     <string name="exp_section_window_tuning">窗口尺寸与位置</string>
     <string name="exp_center_window">小窗居中显示</string>
-    <string name="exp_center_window_summary">修正 HyperOS 原版小窗偏上的问题，将小窗垂直居中置于屏幕中央</string>
+    <string name="exp_center_window_summary">修正原版偏上，垂直居中显示</string>
     <string name="exp_no_offset">禁止小窗偏移</string>
-    <string name="exp_no_offset_summary">打开后，已经有小窗时新开的小窗仍落在同一个默认位置（Flyme 的做法）。HyperOS 默认会给第二个小窗加一个避让偏移（右移 78dp、下移 44dp，看起来是往右下挪了一点），保持关闭即维持系统原样</string>
+    <string name="exp_no_offset_summary">已有小窗时新小窗仍开在同一处（原生小窗也生效）</string>
     <string name="exp_window_scale">小窗缩放比例</string>
-    <string name="exp_window_scale_hint" formatted="false">对齐 Flyme 视觉，默认 80% 视觉宽度（HyperOS 原版约 67%）</string>
+    <string name="exp_window_scale_hint" formatted="false">对齐 Flyme 观感，默认 80%（系统原版约 67%）</string>
     <string name="exp_dim_background">背景暗化遮罩</string>
-    <string name="exp_dim_background_summary">轻量小窗呼出时为背景添加暗色蒙版，突出当前窗口焦点</string>
+    <string name="exp_dim_background_summary">小窗呼出时压暗背景，突出当前窗口</string>
     <string name="exp_section_gestures">小白条手势交互</string>
     <string name="exp_outside_dismiss">点击外部关闭小窗</string>
     <string name="exp_outside_dismiss_action">外部关闭手势</string>
     <string name="exp_outside_dismiss_action_single">单击</string>
     <string name="exp_outside_dismiss_action_double">双击</string>
-    <string name="exp_outside_dismiss_summary">轻量小窗核心体验：点击或双击小窗外部任意区域直接退出</string>
+    <string name="exp_outside_dismiss_summary">点小窗外部任意区域直接退出</string>
     <string name="exp_swipe_up_mini">小白条上滑转为迷你小窗</string>
-    <string name="exp_swipe_up_mini_summary">快速上滑小白条直接挂起为侧边迷你小窗，替换原版关闭逻辑</string>
+    <string name="exp_swipe_up_mini_summary">快速上滑挂起为侧边迷你小窗</string>
     <string name="exp_swipe_up_hold_free">小白条上滑悬停转自由小窗</string>
-    <string name="exp_swipe_up_hold_free_summary">向上拖动并停留悬停时退出接管，转为 HyperOS 原生常驻自由小窗</string>
+    <string name="exp_swipe_up_hold_free_summary">上滑悬停交还系统原生自由小窗</string>
     <string name="exp_swipe_down_fullscreen">小白条下滑全屏展开</string>
-    <string name="exp_swipe_down_fullscreen_summary">向下快速滑动小白条直接全屏化当前应用</string>
+    <string name="exp_swipe_down_fullscreen_summary">下滑直接把当前应用全屏</string>
     <string name="exp_section_info">说明</string>
-    <string name="exp_freeform_info">开启后，小窗将以轻量小窗模式启动。通过小白条上滑悬停转为自由小窗后，模块将直接取消接管，恢复 HyperOS 原生小窗的所有操作（左右拉伸调大小、顶部三点菜单等）。</string>
+    <string name="exp_freeform_info">上滑悬停转为自由小窗后模块即取消接管，恢复 HyperOS 原生小窗的全部操作（左右拉伸调大小、顶部三点菜单等）。</string>
 
     <!-- 小窗底部联系人条（Flyme「联系人头像」移植） -->
     <string name="exp_section_contact_bar">小窗联系人条</string>
     <string name="exp_contact_bar">显示最近联系人头像</string>
+    <string name="exp_contact_bar_summary">小窗下方显示最近聊天的联系人与头像，点击可在小窗内打开会话</string>
     <string name="exp_contact_bar_min_width">小窗宽度低于此值时隐藏</string>
     <string name="exp_contact_bar_min_width_off">不隐藏</string>
-    <string name="exp_contact_bar_summary" formatted="false">微信 / QQ 等应用以小窗打开时，在小窗下方显示最近聊天的联系人（头像 + 名称）：宽度始终与小窗一致并随拉伸实时变化，圆角与小窗一致；小窗变为迷你小窗、或缩小到阈值以下时自动隐藏。点击头像直接在该小窗内打开会话，在头像上上下滑动可移除该联系人。头像与名称来自系统通知，不读取应用数据；因 HyperOS 打开应用会清空其通知，模块会把会话记忆 12 小时。上方阈值按「小窗宽度 ÷ 屏幕宽度」计算：默认 60%（约等于 ROM 默认小窗 70% 宽度的 85%），嫌太敏感就往下调，0 = 完全不按尺寸隐藏。</string>
+    <string name="exp_contact_bar_note" formatted="false">微信 / QQ 等应用以小窗打开时生效：条宽与小窗一致并随拉伸实时变化，圆角同小窗；迷你小窗或宽度低于阈值时自动隐藏。在头像上上下滑动可移除该联系人。头像与名称取自系统通知（不读取应用数据），因 HyperOS 打开应用会清空其通知，模块会把会话记忆 12 小时。阈值按「小窗宽度 ÷ 屏幕宽度」计算，默认 60%，嫌敏感就往下调，0 = 不按尺寸隐藏。</string>
 </resources>

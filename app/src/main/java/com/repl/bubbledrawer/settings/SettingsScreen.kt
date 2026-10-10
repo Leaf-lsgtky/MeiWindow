@@ -90,6 +90,7 @@ fun MainSettingsScreen(
                     add(CardItem("enable") {
                         SwitchRow(
                             title = stringResource(R.string.enable_service),
+                            summary = stringResource(R.string.enable_service_summary),
                             checked = snap.enabled,
                             onCheckedChange = actions::setEnabled,
                         )
@@ -97,12 +98,11 @@ fun MainSettingsScreen(
                     add(CardItem("freeform") {
                         SwitchRow(
                             title = stringResource(R.string.freeform_toggle),
+                            summary = stringResource(R.string.freeform_hint),
                             checked = snap.freeform,
+                            enabled = snap.enabled,
                             onCheckedChange = actions::setFreeform,
                         )
-                    })
-                    add(CardItem("freeform-hint") {
-                        SliderHintRow(stringResource(R.string.freeform_hint))
                     })
                 },
             )
@@ -214,6 +214,7 @@ fun TriggerSettingsScreen(
                                 stringResource(R.string.pos_right),
                             ),
                             selectedIndex = state.triggerPos,
+                            enabled = snap.enabled,
                             onSelect = actions::setTriggerPos,
                         )
                     },
@@ -226,6 +227,8 @@ fun TriggerSettingsScreen(
                     add(CardItem("bottom") {
                         IntSliderRow(
                             title = stringResource(R.string.range_bottom),
+                            summary = stringResource(R.string.range_bottom_summary),
+                            enabled = snap.enabled,
                             value = snap.bottomDp,
                             min = RemotePrefsMinDp, max = RemotePrefsMaxDp,
                             valueText = { stringResource(R.string.dp_value, it) },
@@ -235,6 +238,8 @@ fun TriggerSettingsScreen(
                     add(CardItem("edge") {
                         IntSliderRow(
                             title = stringResource(R.string.range_edge),
+                            summary = stringResource(R.string.range_edge_summary),
+                            enabled = snap.enabled,
                             value = snap.edgeDp,
                             min = RemotePrefsMinDp, max = RemotePrefsMaxDp,
                             valueText = { stringResource(R.string.dp_value, it) },
@@ -244,10 +249,11 @@ fun TriggerSettingsScreen(
                     add(CardItem("preview") {
                         ArrowRow(
                             title = stringResource(R.string.preview_trigger_zone),
+                            enabled = snap.enabled,
                             onClick = onPreviewTriggerZone,
                         )
                     })
-                    add(CardItem("hint") { SliderHintRow(stringResource(R.string.range_hint)) })
+                    add(CardItem("hint") { HintRow(stringResource(R.string.range_hint)) })
                 },
             )
 
@@ -327,16 +333,15 @@ fun FanSettingsScreen(
                     add(CardItem("show_vibrate") {
                         SwitchRow(
                             title = stringResource(R.string.fan_show_vibrate),
+                            summary = stringResource(R.string.fan_show_vibrate_summary),
                             checked = snap.fanShowVibrate,
                             onCheckedChange = actions::setFanShowVibrate,
                         )
                     })
-                    add(CardItem("show_vibrate_hint") {
-                        SliderHintRow(stringResource(R.string.fan_show_vibrate_summary))
-                    })
                     add(CardItem("auto_retract") {
                         DefaultableIntSliderRow(
                             title = stringResource(R.string.fan_auto_retract),
+                            summary = stringResource(R.string.fan_auto_retract_summary),
                             value = snap.fanAutoRetractSec,
                             defaultValue = RemotePrefs.DEFAULT_FAN_AUTO_RETRACT_SEC,
                             min = RemotePrefsFanAutoRetractMin,
@@ -351,12 +356,10 @@ fun FanSettingsScreen(
                             onCommit = actions::setFanAutoRetractSec,
                         )
                     })
-                    add(CardItem("auto_retract_hint") {
-                        SliderHintRow(stringResource(R.string.fan_auto_retract_summary))
-                    })
                     add(CardItem("icon_size") {
                         DefaultableIntSliderRow(
                             title = stringResource(R.string.fan_icon_size),
+                            summary = stringResource(R.string.fan_icon_size_summary),
                             value = snap.fanIconDp,
                             defaultValue = RemotePrefs.DEFAULT_FAN_ICON_DP,
                             min = RemotePrefsFanIconMin,
@@ -368,6 +371,7 @@ fun FanSettingsScreen(
                     add(CardItem("icon_shape") {
                         DropdownRow(
                             title = stringResource(R.string.fan_icon_shape),
+                            summary = stringResource(R.string.fan_icon_shape_summary),
                             items = listOf(
                                 stringResource(R.string.fan_icon_shape_circle),
                                 stringResource(R.string.fan_icon_shape_rounded),
@@ -376,39 +380,35 @@ fun FanSettingsScreen(
                             onSelect = actions::setFanIconShape,
                         )
                     })
-                    add(CardItem("icon_shape_hint") {
-                        SliderHintRow(stringResource(R.string.fan_icon_shape_summary))
-                    })
                     add(CardItem("auto_fill") {
                         SwitchRow(
                             title = stringResource(R.string.fan_auto_fill_recommend),
+                            summary = stringResource(R.string.fan_auto_fill_recommend_summary),
                             checked = snap.fanAutoFillRecommend,
                             onCheckedChange = actions::setFanAutoFillRecommend,
                         )
                     })
-                    add(CardItem("hint") { SliderHintRow(stringResource(R.string.fan_auto_fill_recommend_summary)) })
                     add(CardItem("pressure_page_turn") {
                         SwitchRow(
                             title = stringResource(R.string.fan_pressure_page_turn),
+                            summary = stringResource(R.string.fan_pressure_page_turn_summary),
                             checked = snap.fanPressurePageTurn,
                             onCheckedChange = actions::setFanPressurePageTurn,
                         )
                     })
-                    if (snap.fanPressurePageTurn) {
-                        add(CardItem("pressure_sensitivity") {
-                            DropdownRow(
-                                title = stringResource(R.string.fan_pressure_sensitivity),
-                                items = listOf(
-                                    stringResource(R.string.fan_pressure_sensitivity_standard),
-                                    stringResource(R.string.fan_pressure_sensitivity_sensitive),
-                                    stringResource(R.string.fan_pressure_sensitivity_heavy),
-                                ),
-                                selectedIndex = snap.fanPressureSensitivity.coerceIn(0, 2),
-                                onSelect = actions::setFanPressureSensitivity,
-                            )
-                        })
-                    }
-                    add(CardItem("pressure_hint") { SliderHintRow(stringResource(R.string.fan_pressure_page_turn_summary)) })
+                    add(CardItem("pressure_sensitivity") {
+                        DropdownRow(
+                            title = stringResource(R.string.fan_pressure_sensitivity),
+                            items = listOf(
+                                stringResource(R.string.fan_pressure_sensitivity_standard),
+                                stringResource(R.string.fan_pressure_sensitivity_sensitive),
+                                stringResource(R.string.fan_pressure_sensitivity_heavy),
+                            ),
+                            selectedIndex = snap.fanPressureSensitivity.coerceIn(0, 2),
+                            enabled = snap.fanPressurePageTurn,
+                            onSelect = actions::setFanPressureSensitivity,
+                        )
+                    })
                 },
             )
 
@@ -518,7 +518,7 @@ fun MorePanelSettingsScreen(
                             onSelect = actions::setPanelDismissOutside,
                         )
                     })
-                    add(CardItem("hint") { SliderHintRow(stringResource(R.string.more_panel_hint)) })
+                    add(CardItem("hint") { HintRow(stringResource(R.string.more_panel_hint)) })
                 },
             )
 
@@ -528,24 +528,23 @@ fun MorePanelSettingsScreen(
                     add(CardItem("enable") {
                         SwitchRow(
                             title = stringResource(R.string.recommend_apps_enable),
+                            summary = stringResource(R.string.recommend_apps_hint),
                             checked = snap.recommendEnabled,
                             onCheckedChange = actions::setRecommendEnabled,
                         )
                     })
-                    if (snap.recommendEnabled) {
-                        add(CardItem("count") {
-                            StepIntSliderRow(
-                                title = stringResource(R.string.recommend_apps_count),
-                                value = snap.recommendCount,
-                                min = RemotePrefs.RECOMMEND_COUNT_MIN,
-                                max = RemotePrefs.RECOMMEND_COUNT_MAX,
-                                step = RemotePrefs.RECOMMEND_COUNT_STEP,
-                                valueText = { stringResource(R.string.recommend_apps_count_format, it) },
-                                onCommit = actions::setRecommendCount,
-                            )
-                        })
-                    }
-                    add(CardItem("hint") { SliderHintRow(stringResource(R.string.recommend_apps_hint)) })
+                    add(CardItem("count") {
+                        StepIntSliderRow(
+                            title = stringResource(R.string.recommend_apps_count),
+                            value = snap.recommendCount,
+                            min = RemotePrefs.RECOMMEND_COUNT_MIN,
+                            max = RemotePrefs.RECOMMEND_COUNT_MAX,
+                            step = RemotePrefs.RECOMMEND_COUNT_STEP,
+                            enabled = snap.recommendEnabled,
+                            valueText = { stringResource(R.string.recommend_apps_count_format, it) },
+                            onCommit = actions::setRecommendCount,
+                        )
+                    })
                 },
             )
 
@@ -608,17 +607,18 @@ fun ExperimentalSettingsScreen(
                     CardItem("enable-flyme-freeform") {
                         SwitchRow(
                             title = stringResource(R.string.exp_flyme_freeform_title),
+                            summary = stringResource(R.string.exp_flyme_freeform_summary),
                             checked = snap.flymeFreeformEnabled,
                             onCheckedChange = actions::setFlymeFreeformEnabled,
                         )
-                    },
-                    CardItem("enable-flyme-freeform-hint") {
-                        SliderHintRow(stringResource(R.string.exp_flyme_freeform_summary))
                     },
                 ),
             )
 
             // --- 窗口尺寸与位置 ---
+            // 总开关关掉后这些都是灰的（miuix 的 enabled=false）：Flyme 轻量小窗没接管时，
+            // 居中/缩放/遮罩都无处生效。唯一例外是「禁止小窗偏移」——它压的是 HyperOS 自己的
+            // 避让行为，原生小窗模式下同样有效，所以永远可点。
             item(key = "exp-window-title") {
                 SmallTitle(text = stringResource(R.string.exp_section_window_tuning))
             }
@@ -628,45 +628,40 @@ fun ExperimentalSettingsScreen(
                     add(CardItem("center-window") {
                         SwitchRow(
                             title = stringResource(R.string.exp_center_window),
+                            summary = stringResource(R.string.exp_center_window_summary),
                             checked = snap.flymeFreeformCenter,
+                            enabled = snap.flymeFreeformEnabled,
                             onCheckedChange = actions::setFlymeFreeformCenter,
                         )
-                    })
-                    add(CardItem("center-window-hint") {
-                        SliderHintRow(stringResource(R.string.exp_center_window_summary))
                     })
                     add(CardItem("no-offset") {
                         SwitchRow(
                             title = stringResource(R.string.exp_no_offset),
+                            summary = stringResource(R.string.exp_no_offset_summary),
                             checked = snap.flymeFreeformNoOffset,
                             onCheckedChange = actions::setFlymeFreeformNoOffset,
                         )
                     })
-                    add(CardItem("no-offset-hint") {
-                        SliderHintRow(stringResource(R.string.exp_no_offset_summary))
-                    })
                     add(CardItem("scale-window") {
                         IntSliderRow(
                             title = stringResource(R.string.exp_window_scale),
+                            summary = stringResource(R.string.exp_window_scale_hint),
                             value = snap.flymeFreeformScale,
                             min = RemotePrefs.FLYME_FREEFORM_SCALE_MIN,
                             max = RemotePrefs.FLYME_FREEFORM_SCALE_MAX,
+                            enabled = snap.flymeFreeformEnabled,
                             valueText = { stringResource(R.string.pct_value, it) },
                             onCommit = actions::setFlymeFreeformScale,
                         )
                     })
-                    add(CardItem("scale-window-hint") {
-                        SliderHintRow(stringResource(R.string.exp_window_scale_hint))
-                    })
                     add(CardItem("dim-bg") {
                         SwitchRow(
                             title = stringResource(R.string.exp_dim_background),
+                            summary = stringResource(R.string.exp_dim_background_summary),
                             checked = snap.flymeFreeformDimBg,
+                            enabled = snap.flymeFreeformEnabled,
                             onCheckedChange = actions::setFlymeFreeformDimBg,
                         )
-                    })
-                    add(CardItem("dim-bg-hint") {
-                        SliderHintRow(stringResource(R.string.exp_dim_background_summary))
                     })
                 },
             )
@@ -681,27 +676,27 @@ fun ExperimentalSettingsScreen(
                     add(CardItem("contact-bar") {
                         SwitchRow(
                             title = stringResource(R.string.exp_contact_bar),
+                            summary = stringResource(R.string.exp_contact_bar_summary),
                             checked = snap.contactBar,
                             onCheckedChange = actions::setContactBar,
                         )
                     })
-                    if (snap.contactBar) {
-                        add(CardItem("contact-bar-min-width") {
-                            IntSliderRow(
-                                title = stringResource(R.string.exp_contact_bar_min_width),
-                                value = snap.contactBarMinWidthPct,
-                                min = RemotePrefs.CONTACT_BAR_MIN_WIDTH_MIN,
-                                max = RemotePrefs.CONTACT_BAR_MIN_WIDTH_MAX,
-                                valueText = {
-                                    if (it == 0) stringResource(R.string.exp_contact_bar_min_width_off)
-                                    else stringResource(R.string.pct_value, it)
-                                },
-                                onCommit = actions::setContactBarMinWidthPct,
-                            )
-                        })
-                    }
+                    add(CardItem("contact-bar-min-width") {
+                        IntSliderRow(
+                            title = stringResource(R.string.exp_contact_bar_min_width),
+                            value = snap.contactBarMinWidthPct,
+                            min = RemotePrefs.CONTACT_BAR_MIN_WIDTH_MIN,
+                            max = RemotePrefs.CONTACT_BAR_MIN_WIDTH_MAX,
+                            enabled = snap.contactBar,
+                            valueText = {
+                                if (it == 0) stringResource(R.string.exp_contact_bar_min_width_off)
+                                else stringResource(R.string.pct_value, it)
+                            },
+                            onCommit = actions::setContactBarMinWidthPct,
+                        )
+                    })
                     add(CardItem("contact-bar-hint") {
-                        SliderHintRow(stringResource(R.string.exp_contact_bar_summary))
+                        HintRow(stringResource(R.string.exp_contact_bar_note))
                     })
                 },
             )
@@ -716,55 +711,50 @@ fun ExperimentalSettingsScreen(
                     add(CardItem("outside-dismiss") {
                         SwitchRow(
                             title = stringResource(R.string.exp_outside_dismiss),
+                            summary = stringResource(R.string.exp_outside_dismiss_summary),
                             checked = snap.flymeFreeformOutsideDismiss,
+                            enabled = snap.flymeFreeformEnabled,
                             onCheckedChange = actions::setFlymeFreeformOutsideDismiss,
                         )
                     })
-                    if (snap.flymeFreeformOutsideDismiss) {
-                        add(CardItem("outside-dismiss-action") {
-                            DropdownRow(
-                                title = stringResource(R.string.exp_outside_dismiss_action),
-                                items = listOf(
-                                    stringResource(R.string.exp_outside_dismiss_action_single),
-                                    stringResource(R.string.exp_outside_dismiss_action_double),
-                                ),
-                                selectedIndex = snap.flymeFreeformOutsideDismissAction,
-                                onSelect = actions::setFlymeFreeformOutsideDismissAction,
-                            )
-                        })
-                    }
-                    add(CardItem("outside-dismiss-hint") {
-                        SliderHintRow(stringResource(R.string.exp_outside_dismiss_summary))
+                    add(CardItem("outside-dismiss-action") {
+                        DropdownRow(
+                            title = stringResource(R.string.exp_outside_dismiss_action),
+                            items = listOf(
+                                stringResource(R.string.exp_outside_dismiss_action_single),
+                                stringResource(R.string.exp_outside_dismiss_action_double),
+                            ),
+                            selectedIndex = snap.flymeFreeformOutsideDismissAction,
+                            enabled = snap.flymeFreeformEnabled && snap.flymeFreeformOutsideDismiss,
+                            onSelect = actions::setFlymeFreeformOutsideDismissAction,
+                        )
                     })
                     add(CardItem("swipe-up-mini") {
                         SwitchRow(
                             title = stringResource(R.string.exp_swipe_up_mini),
+                            summary = stringResource(R.string.exp_swipe_up_mini_summary),
                             checked = snap.flymeFreeformSwipeUpMini,
+                            enabled = snap.flymeFreeformEnabled,
                             onCheckedChange = actions::setFlymeFreeformSwipeUpMini,
                         )
-                    })
-                    add(CardItem("swipe-up-mini-hint") {
-                        SliderHintRow(stringResource(R.string.exp_swipe_up_mini_summary))
                     })
                     add(CardItem("swipe-up-hold-free") {
                         SwitchRow(
                             title = stringResource(R.string.exp_swipe_up_hold_free),
+                            summary = stringResource(R.string.exp_swipe_up_hold_free_summary),
                             checked = snap.flymeFreeformSwipeUpHoldFree,
+                            enabled = snap.flymeFreeformEnabled,
                             onCheckedChange = actions::setFlymeFreeformSwipeUpHoldFree,
                         )
-                    })
-                    add(CardItem("swipe-up-hold-free-hint") {
-                        SliderHintRow(stringResource(R.string.exp_swipe_up_hold_free_summary))
                     })
                     add(CardItem("swipe-down-full") {
                         SwitchRow(
                             title = stringResource(R.string.exp_swipe_down_fullscreen),
+                            summary = stringResource(R.string.exp_swipe_down_fullscreen_summary),
                             checked = snap.flymeFreeformSwipeDownFull,
+                            enabled = snap.flymeFreeformEnabled,
                             onCheckedChange = actions::setFlymeFreeformSwipeDownFull,
                         )
-                    })
-                    add(CardItem("swipe-down-full-hint") {
-                        SliderHintRow(stringResource(R.string.exp_swipe_down_fullscreen_summary))
                     })
                 },
             )
@@ -777,7 +767,7 @@ fun ExperimentalSettingsScreen(
                 keyPrefix = "exp-info",
                 items = listOf(
                     CardItem("info-text") {
-                        SliderHintRow(stringResource(R.string.exp_freeform_info))
+                        HintRow(stringResource(R.string.exp_freeform_info))
                     },
                 ),
             )

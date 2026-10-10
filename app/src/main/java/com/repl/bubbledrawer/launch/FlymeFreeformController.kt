@@ -1768,6 +1768,14 @@ class FlymeFreeformController(
          *
          * 迷你小窗自己的排布（`autoOrderingAvoidMiniTask` / `avoidForActiveMiniTask`）不走这个函数，
          * 贴边/侧边栏避让（`adjustBoundsForSidebarIfNeed`）也不走，都不受影响。
+         *
+         * 开关只受「禁止小窗偏移」控制，**不看** Flyme 样式小窗总开关：这是对 HyperOS 自身行为的
+         * 开关，原生小窗模式下同样应该生效（用户实测反馈）。
+         *
+         * 这是开关的**开**那一半。关的那一半在 [applyRomAvoidOffset]：ROM 那次避让会被模块的居中
+         * 覆盖掉（它在 `getCustomFreeformRect` 内部，居中在它返回之后），所以关掉开关时得由我们
+         * 在居中之后再补一次同样的避让，第二个小窗才会像原版那样往右下错开（只在 Flyme 样式 +
+         * 居中接管了位置时才需要；总开关关着时 ROM 那次避让本来就是生效的）。
          */
         private fun hookFreeformAvoidOffset(
             module: XposedModule,
@@ -1787,10 +1795,11 @@ class FlymeFreeformController(
                     .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                     .setId("bubbledrawer.freeform.no_offset")
                     .intercept { chain ->
+                        // Deliberately independent of the Flyme-style master switch: 「禁止小窗偏移」
+                        // is about HyperOS's own 错开 behaviour, so it must also work while the module
+                        // is not taking the 小窗 over at all (user report: 不开 Flyme 小窗时开关不生效).
                         val snap = RemotePrefs.read(prefs)
-                        if (!snap.flymeFreeformEnabled || !snap.flymeFreeformNoOffset) {
-                            return@intercept chain.proceed()
-                        }
+                        if (!snap.flymeFreeformNoOffset) return@intercept chain.proceed()
                         logOffsetSkipped(chain.args)
                         null
                     }
@@ -1918,10 +1927,48 @@ class FlymeFreeformController(
             val visualH = rect.height() * scale
             val (targetLeft, targetTop) = centeredOrigin(visualW, visualH, dm.widthPixels, dm.heightPixels)
             rect.offsetTo(targetLeft, targetTop)
+            // 禁止小窗偏移 = 关: 把已经居中好的窗口再交给 ROM 的避让逻辑一次，第二个小窗因此落在
+            // 「第一个的位置 + 右 78dp / 下 44dp」（方向选择与屏幕内夹取都由 ROM 自己决定）。
+            if (!snap.flymeFreeformNoOffset) applyRomAvoidOffset(rect, visualW, visualH)
             log(
                 "CENTERED_BOUNDS rect=$rect scale=$scale targetScale=$targetScale " +
                     "visual=(${visualW.toInt()}x${visualH.toInt()}) screen=(${dm.widthPixels}x${dm.heightPixels})",
             )
+        }
+
+        /**
+         * 「禁止小窗偏移」关闭时，让 ROM 的避让在**居中之后**再生效一次。
+         *
+         * 为什么必须由我们补这一步：ROM 的避让发生在 `getCustomFreeformRect` **内部**
+         * （`getAvoidFreeformBounds:1541` → `avoidAsPossible` → `avoidIfNeeded`），而模块的居中是
+         * 在那个方法**返回之后**重新摆放窗口 —— 所以只要「小窗居中」开着，ROM 那次避让就被覆盖，
+         * 开关关掉也看不到偏移（用户实测：两个小窗的 task 配置完全相同）。
+         *
+         * 这里直接调 ROM 自己的 `avoidAsPossible(mobile, fixed, restriction)`：左右/上下的方向选择、
+         * 78dp/44dp 的常量、以及"挪出去会出屏"时的夹取，全部沿用它的 if-else，不复刻一套。
+         * 拿不到"另一个小窗"（没有小窗、或遮罩没跟踪到它）时什么都不做 —— 与"只有一个窗口"时的
+         * 原生行为一致。
+         */
+        private fun applyRomAvoidOffset(rect: Rect, visualW: Float, visualH: Float) {
+            // `activeTaskInfo` is the mask's window (the volatile mirror, readable from any thread);
+            // it is the "other 小窗" for a launch that is happening right now.
+            val other = instance?.activeTaskInfo?.takeIf { FreeformTask.isPlain(it) }
+                ?.let { FreeformTask.visualBounds(it) }
+                ?.takeIf { !it.isEmpty }
+                ?: return
+            val area = freeformAccessibleArea() ?: return
+            val mobile = Rect(rect.left, rect.top, rect.left + visualW.toInt(), rect.top + visualH.toInt())
+            val applied = runCatching {
+                Class.forName("android.util.MiuiMultiWindowUtils")
+                    .getMethod("avoidAsPossible", Rect::class.java, Rect::class.java, Rect::class.java)
+                    .invoke(null, mobile, other, area)
+                true
+            }.getOrDefault(false)
+            if (!applied) return
+            val dx = mobile.left - rect.left
+            val dy = mobile.top - rect.top
+            rect.offset(dx, dy)
+            log("CENTERED_BOUNDS_AVOIDED other=$other visual=$mobile delta=($dx,$dy)")
         }
 
         /**
@@ -1936,22 +1983,10 @@ class FlymeFreeformController(
          * `ADDITIONAL_FREEFORM_RESOLUTIONS` aspect ratios.
          */
         private fun launchScale(rect: Rect, targetScale: Float): Float? {
-            val context = savedContext ?: return null
+            val area = freeformAccessibleArea() ?: return null
             val reviewed = runCatching {
-                val utils = Class.forName("android.util.MiuiMultiWindowUtils")
-                val desktopMode = runCatching {
-                    utils.getDeclaredMethod("isDesktopMode", Context::class.java)
-                        .apply { isAccessible = true }.invoke(null, context) as? Boolean ?: false
-                }.getOrDefault(false)
-                val area = utils.getMethod(
-                    "getFreeFormAccessibleArea",
-                    Context::class.java,
-                    java.lang.Boolean.TYPE,
-                    java.lang.Boolean.TYPE,
-                ).invoke(null, context, true, desktopMode) as? Rect
-                if (area == null || area.isEmpty) return@runCatching null
                 val bounds = Rect(0, 0, rect.width(), rect.height())
-                (utils.getMethod(
+                (Class.forName("android.util.MiuiMultiWindowUtils").getMethod(
                     "reviewFreeFormBounds",
                     Rect::class.java,
                     Rect::class.java,
@@ -1960,6 +1995,27 @@ class FlymeFreeformController(
                 ).invoke(null, bounds, Rect(), targetScale, area) as? Number)?.toFloat()
             }.getOrNull()
             return reviewed?.takeIf { it.isFinite() && it > 0f }
+        }
+
+        /**
+         * `MiuiMultiWindowUtils.getFreeFormAccessibleArea(context, true, isDesktopMode(context))` —
+         * the ROM's own "where a 小窗 may live" rect, shared by the scale review and the avoid step.
+         */
+        private fun freeformAccessibleArea(): Rect? {
+            val context = savedContext ?: return null
+            return runCatching {
+                val utils = Class.forName("android.util.MiuiMultiWindowUtils")
+                val desktopMode = runCatching {
+                    utils.getDeclaredMethod("isDesktopMode", Context::class.java)
+                        .apply { isAccessible = true }.invoke(null, context) as? Boolean ?: false
+                }.getOrDefault(false)
+                utils.getMethod(
+                    "getFreeFormAccessibleArea",
+                    Context::class.java,
+                    java.lang.Boolean.TYPE,
+                    java.lang.Boolean.TYPE,
+                ).invoke(null, context, true, desktopMode) as? Rect
+            }.getOrNull()?.takeIf { !it.isEmpty }
         }
 
         private fun hookTaskRepository(
