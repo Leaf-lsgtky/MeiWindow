@@ -1826,21 +1826,76 @@ class FlymeFreeformController(
             log("HOOK_INSTALLED_BoundsCentering")
         }
 
+        /**
+         * Center the launch rect on the screen (设置项「小窗居中」), for **both** orientations.
+         *
+         * The rect is in *unscaled* task space, so the visible size is `rect * scale` — and that scale
+         * is not the setting: the ROM clamps it to whatever fits the freeform accessible area, which
+         * for a landscape window is ~1/aspect smaller than the setting (see [hookFreeformScale]).
+         * Centering with the setting verbatim would compute a negative left/top and hang the window
+         * off both screen edges. This is also the only place a directly-opened 横屏小窗 gets centered
+         * at all: the ROM centers such a window horizontally (`getLeftMargin`) but pins it to the top
+         * of the screen (`getTopMargin` returns 0 whenever the display itself is portrait).
+         */
         private fun centerRectOnScreen(rect: Rect, snap: RemotePrefs.Snapshot) {
-            // Portrait only. A landscape window is ~2.2x wider on the same short side and its scale is
-            // clamped to exactly fit the display (hookFreeformScale), so centering it with this
-            // portrait math would compute a negative left and hang it off *both* screen edges. The
-            // ROM's own `getLeftMargin` already centered it with the clamped scale — our
-            // ARGS_LEFT_MARGIN override (-1) is precisely what sends it down that branch.
-            if (rect.width() >= rect.height()) return
             val dm = android.content.res.Resources.getSystem().displayMetrics
             val targetScale = (snap.flymeFreeformScale.coerceIn(50, 95)) / 100f
-            val visualW = rect.width() * targetScale
-            val visualH = rect.height() * targetScale
-            val targetLeft = Math.round((dm.widthPixels - visualW) / 2f)
-            val targetTop = Math.round((dm.heightPixels - visualH) / 2f)
+            val fitted = launchScale(rect, targetScale)
+            if (fitted == null && rect.width() >= rect.height()) {
+                // A landscape window's visible size is ~1/aspect *smaller* than the setting, so
+                // centering it with the setting would be wrong in the harmful direction (off both
+                // edges). Without the ROM's reviewed scale, leave its own placement — top-aligned,
+                // but at least fully on screen — alone.
+                log("CENTERED_BOUNDS_SKIPPED_WIDE rect=$rect targetScale=$targetScale")
+                return
+            }
+            val scale = fitted ?: targetScale
+            val visualW = rect.width() * scale
+            val visualH = rect.height() * scale
+            val (targetLeft, targetTop) = centeredOrigin(visualW, visualH, dm.widthPixels, dm.heightPixels)
             rect.offsetTo(targetLeft, targetTop)
-            log("CENTERED_BOUNDS rect=$rect targetScale=$targetScale visual=(${visualW.toInt()}x${visualH.toInt()}) screen=(${dm.widthPixels}x${dm.heightPixels})")
+            log(
+                "CENTERED_BOUNDS rect=$rect scale=$scale targetScale=$targetScale " +
+                    "visual=(${visualW.toInt()}x${visualH.toInt()}) screen=(${dm.widthPixels}x${dm.heightPixels})",
+            )
+        }
+
+        /**
+         * The scale the ROM will apply to a task with these unscaled bounds: its own
+         * `reviewFreeFormBounds` of our preferred scale against the freeform accessible area — the very
+         * computation `getFreeFormScale` performs (see [hookFreeformScale]), so the centering above
+         * agrees with the size the window actually ends up having. Null when the ROM cannot be asked.
+         *
+         * Reviewing the *returned rect* (rather than re-deriving `getPossibleBounds` from
+         * vertical/landscape/package) is what makes this correct for every launch path: the rect
+         * already carries whatever bounds the ROM chose, including the fixed
+         * `ADDITIONAL_FREEFORM_RESOLUTIONS` aspect ratios.
+         */
+        private fun launchScale(rect: Rect, targetScale: Float): Float? {
+            val context = savedContext ?: return null
+            val reviewed = runCatching {
+                val utils = Class.forName("android.util.MiuiMultiWindowUtils")
+                val desktopMode = runCatching {
+                    utils.getDeclaredMethod("isDesktopMode", Context::class.java)
+                        .apply { isAccessible = true }.invoke(null, context) as? Boolean ?: false
+                }.getOrDefault(false)
+                val area = utils.getMethod(
+                    "getFreeFormAccessibleArea",
+                    Context::class.java,
+                    java.lang.Boolean.TYPE,
+                    java.lang.Boolean.TYPE,
+                ).invoke(null, context, true, desktopMode) as? Rect
+                if (area == null || area.isEmpty) return@runCatching null
+                val bounds = Rect(0, 0, rect.width(), rect.height())
+                (utils.getMethod(
+                    "reviewFreeFormBounds",
+                    Rect::class.java,
+                    Rect::class.java,
+                    java.lang.Float.TYPE,
+                    Rect::class.java,
+                ).invoke(null, bounds, Rect(), targetScale, area) as? Number)?.toFloat()
+            }.getOrNull()
+            return reviewed?.takeIf { it.isFinite() && it > 0f }
         }
 
         private fun hookTaskRepository(
@@ -2149,3 +2204,14 @@ class FlymeFreeformController(
  */
 fun fitFreeformScale(target: Float, romScale: Float?): Float =
     if (romScale == null || !romScale.isFinite() || romScale <= 0f) target else minOf(target, romScale)
+
+/**
+ * Top-left corner that centers a `visualW x visualH` window on a `screenW x screenH` screen — the
+ * arithmetic behind 小窗居中, for either orientation.
+ *
+ * The caller passes the window's *visible* size (`unscaled bounds x the scale the ROM will apply`,
+ * see `fitFreeformScale`): using the raw setting instead is what used to push a 横屏窗口 off both
+ * screen edges, because its unscaled bounds are ~2.2x wider on the same short side.
+ */
+fun centeredOrigin(visualW: Float, visualH: Float, screenW: Int, screenH: Int): Pair<Int, Int> =
+    Math.round((screenW - visualW) / 2f) to Math.round((screenH - visualH) / 2f)
