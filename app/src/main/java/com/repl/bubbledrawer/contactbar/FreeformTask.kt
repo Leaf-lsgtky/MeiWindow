@@ -202,4 +202,15 @@ interface FreeformObserver {
      * do not distinguish the two.
      */
     fun onFreeformTaskFocused(taskInfo: Any) = onFreeformTaskAppeared(taskInfo)
+
+    /**
+     * A freeform window became the focused one — `MultiTaskingTaskRepository.updateFreeformTaskToTop`
+     * fires on every focus gain (`onTaskInfoChanged` for `runningTaskInfo.isFocused`) and on
+     * `moveToFront`.
+     *
+     * This is what brings the bar back: with two 小窗 open, tapping the other one takes focus away (bar
+     * hides, which is correct), and tapping this one again is announced *only* here — a plain tap is
+     * not a move/resize gesture, so no other hook sees it.
+     */
+    fun onFreeformTaskToFront(taskId: Int) {}
 }

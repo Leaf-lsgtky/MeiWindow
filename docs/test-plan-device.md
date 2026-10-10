@@ -104,6 +104,10 @@ E:\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 - [ ] **上滑/下拉头像 → 移除该联系人**（`CONTACT_BAR_FORGET pkg=… title=…`）；移除最后一个后整条消失
       （`CONTACT_BAR_HIDE reason=EMPTY_AFTER_REMOVE`）；该会话来了**新消息**后应重新出现
 - [ ] 小窗**移动**（拖顶部把手）时条跟着走
+- [ ] **两个小窗并存**：操作另一个小窗 → 条消失（`CONTACT_BAR_HIDE reason=UNFOCUSED` /
+      `CONTACT_BAR_LOST_FOCUS` 或 `CONTACT_BAR_FOCUS_SWITCH`）；**点回微信小窗 → 条回来**
+      （`CONTACT_BAR_FOCUS_SWITCH` 或 `CONTACT_BAR_REGAINED_FOCUS`）。
+      信号是 `MultiTaskingTaskRepository.updateFreeformTaskToTop`（任何小窗获得焦点都会触发）
 - [ ] 小白条上滑 → **迷你小窗**：条立即消失（日志 `CONTACT_BAR_HIDE reason=MINI`）；
       从迷你恢复成普通小窗 → 条自动回来（`CONTACT_BAR_SHOW`）
 - [ ] **关闭小窗动画期间不再跟随**：点 ✕ / 小白条上滑关闭的**那一刻**条就消失

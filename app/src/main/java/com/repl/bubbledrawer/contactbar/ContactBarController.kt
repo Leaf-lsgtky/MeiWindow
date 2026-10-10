@@ -89,6 +89,15 @@ class ContactBarController(
     /** While set, the bar stays hidden: the window is closing, so it must not ride the animation. */
     private var closingUntil = 0L
 
+    /**
+     * Another 小窗 holds the focus, so this window's bar must not show. Cleared the moment this window
+     * is brought to the front again (`onFreeformTaskToFront`).
+     */
+    private var unfocused = false
+
+    /** taskId → the `MiuiFreeformModeTaskInfo` we have seen for it (bounded, main thread only). */
+    private val taskById = HashMap<Int, Any>()
+
     @Volatile
     private var task: Any? = null
 
@@ -123,11 +132,13 @@ class ContactBarController(
     // ---------------------------------------------------------------- FreeformObserver
 
     override fun onFreeformTaskAppeared(taskInfo: Any) = onMain {
+        rememberTask(taskInfo)
         if (task !== taskInfo) {
             task = taskInfo
             currentPkg = null
             hideReason = null
             closingUntil = 0L
+            unfocused = false
             log(
                 Log.INFO,
                 "CONTACT_BAR_TASK_APPEARED pkg=${FreeformTask.packageName(taskInfo)} " +
@@ -151,13 +162,59 @@ class ContactBarController(
     }
 
     /**
+     * Focus moved to a freeform window: **the bar belongs to the focused one**, so switch to it if we
+     * know it, otherwise hide.
+     *
+     * This is the fix for using two 小窗 at once: tapping the other window took the bar away (correct),
+     * and nothing else ever reported the tap that comes back — a plain tap is neither a move nor a
+     * resize gesture, so only this event announces it.
+     */
+    override fun onFreeformTaskToFront(taskId: Int) = onMain {
+        val known = taskById[taskId]
+        val current = task
+        if (known != null && known !== current) {
+            log(
+                Log.INFO,
+                "CONTACT_BAR_FOCUS_SWITCH taskId=$taskId pkg=${FreeformTask.packageName(known)} " +
+                    "from=${current?.let { FreeformTask.taskId(it) }}",
+            )
+            task = known
+            currentPkg = null
+            hideReason = null
+            closingUntil = 0L
+            unfocused = false
+            fastUntil = SystemClock.uptimeMillis() + FAST_WINDOW_MS
+            scheduleFrame()
+            return@onMain
+        }
+        if (current != null && FreeformTask.taskId(current) == taskId) {
+            if (unfocused) {
+                log(Log.INFO, "CONTACT_BAR_REGAINED_FOCUS taskId=$taskId")
+                unfocused = false
+                hideReason = null
+                fastUntil = SystemClock.uptimeMillis() + FAST_WINDOW_MS
+            }
+            scheduleFrame()
+            return@onMain
+        }
+        // Another window we never saw an event for holds the focus: hide until it tells us more.
+        if (!unfocused) {
+            log(Log.INFO, "CONTACT_BAR_LOST_FOCUS taskId=$taskId")
+            unfocused = true
+        }
+        detach("UNFOCUSED")
+    }
+
+    /**
      * A resize/move gesture on a window: re-target if it is a different task, and track every frame
-     * for the duration of the drag (the gesture is what `超宽度实时一致` hinges on).
+     * for the duration of the drag (the gesture is what `宽度实时一致` hinges on).
      */
     override fun onFreeformTaskFocused(taskInfo: Any) = onMain {
+        rememberTask(taskInfo)
         if (task !== taskInfo) {
             task = taskInfo
             currentPkg = null
+            unfocused = false
             log(
                 Log.INFO,
                 "CONTACT_BAR_TASK_FOCUSED pkg=${FreeformTask.packageName(taskInfo)} " +
@@ -169,15 +226,26 @@ class ContactBarController(
     }
 
     override fun onFreeformTaskVanished(taskId: Int) = onMain {
+        taskById.remove(taskId)
         val current = task ?: return@onMain
         if (FreeformTask.taskId(current) == taskId) {
             log(Log.INFO, "CONTACT_BAR_TASK_VANISHED taskId=$taskId")
             task = null
+            unfocused = false
             detach("TASK_VANISHED")
         }
     }
 
+    /** Remember the objects behind task ids, so a bare "this task came to front" can be resolved. */
+    private fun rememberTask(taskInfo: Any) {
+        val id = FreeformTask.taskId(taskInfo)
+        if (id <= 0) return
+        if (taskById.size > MAX_TRACKED_TASKS) taskById.clear()
+        taskById[id] = taskInfo
+    }
+
     override fun onFreeformTaskModeChanged(taskInfo: Any, oldMode: Int, newMode: Int) = onMain {
+        rememberTask(taskInfo)
         if (task !== taskInfo) task = taskInfo
         log(Log.INFO, "CONTACT_BAR_MODE_CHANGED old=$oldMode new=$newMode")
         // 0 = 普通小窗 (bar visible), 1/2/3 = 迷你/贴边 (bar must go away).
@@ -233,6 +301,12 @@ class ContactBarController(
         if (FreeformTask.isExiting(info)) {
             closingUntil = now + CLOSE_LATCH_MS
             detach("EXITING")
+            return
+        }
+
+        // Another 小窗 owns the focus: this window's bar stays away until it is brought back.
+        if (unfocused) {
+            detach("UNFOCUSED")
             return
         }
 
@@ -670,5 +744,8 @@ class ContactBarController(
 
         /** Idle polling stride: geometry is unchanged, so every 4th frame is plenty. */
         const val IDLE_FRAME_STRIDE = 4
+
+        /** At most this many freeform tasks are remembered for focus lookups (two is the ROM's cap). */
+        const val MAX_TRACKED_TASKS = 4
     }
 }

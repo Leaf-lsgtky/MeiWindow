@@ -900,8 +900,42 @@ class FlymeFreeformController(
             hookBottomCaptionGestures(module, prefs, classLoader)
             hookResizeFocus(module, classLoader)
             hookTaskExit(module, classLoader)
+            hookTaskToFront(module, classLoader)
             hookImeState(module, classLoader)
             hookGestureAnimation(module, classLoader)
+        }
+
+        /**
+         * "Which 小窗 is focused now" — `MultiTaskingTaskRepository.updateFreeformTaskToTop(int,
+         * String)` is called for every freeform focus gain (`onTaskInfoChanged` :509-512 when
+         * `runningTaskInfo.isFocused`) and from `MiuiFreeformModeController` `moveToFront` (:2800).
+         *
+         * Consumers that draw around one specific window (the contact bar) need this to know both that
+         * another window took focus — hide — and that theirs got it back, which a plain tap otherwise
+         * never reports.
+         */
+        private fun hookTaskToFront(
+            module: XposedModule,
+            classLoader: ClassLoader,
+        ) {
+            val cls = runCatching {
+                classLoader.loadClass("com.android.wm.shell.multitasking.common.taskmanager.MultiTaskingTaskRepository")
+            }.getOrNull() ?: return
+            cls.declaredMethods
+                .filter { it.name == "updateFreeformTaskToTop" && it.parameterTypes.firstOrNull() == Int::class.javaPrimitiveType }
+                .forEach { m ->
+                    runCatching {
+                        module.hook(m)
+                            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                            .setId("bubbledrawer.freeform.to_front")
+                            .intercept { chain ->
+                                val taskId = (chain.args.firstOrNull() as? Number)?.toInt() ?: -1
+                                if (taskId > 0) freeformObserver?.onFreeformTaskToFront(taskId)
+                                chain.proceed()
+                            }
+                    }
+                }
+            log("HOOK_INSTALLED_MultiTaskingTaskRepository.updateFreeformTaskToTop")
         }
 
         /**
