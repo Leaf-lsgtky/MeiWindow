@@ -56,11 +56,32 @@ object LightOpen {
     const val MAX_TARGET_LEN = 200
 
     /**
-     * 小米安全中心的"XX 想打开 XX，是否允许"拦截弹窗。它是系统弹窗：带名单的跳转被它拦下来时，
-     * 这次启动的目标就是它（真实目标在它后面那一次启动里）—— 绝不能把拦截框本身变成小窗
-     * （真机反馈 2026-10-14）。
+     * 小米安全中心的"XX 想打开 XX，是否允许"拦截弹窗与分身/应用锁核心包。它们是系统弹窗：
+     * 带名单的跳转被拦下来时，这次启动的目标就是它们（真实目标在后面那一次启动里）——
+     * 绝不能把拦截框本身变成小窗（真机反馈 2026-10-14）。
      */
     const val SECURITY_CENTER = "com.miui.securitycenter"
+    const val SECURITY_CORE = "com.miui.securitycore"
+
+    /** 模块自身包名：`GateLaunchStrategy` 点名小窗只从模块自身（或安全中心二次确认后）发起。 */
+    const val MODULE_PACKAGE = "com.repl.bubbledrawer"
+
+    /** 桌面、负一屏与全局搜索：无论 PackageManager 查询是否就绪，这些包在前台时都算桌面环境。 */
+    const val MIUI_HOME = "com.miui.home"
+    const val MIUI_PERSONAL_ASSISTANT = "com.miui.personalassistant"
+    const val ANDROID_QUICK_SEARCH_BOX = "com.android.quicksearchbox"
+
+    val BUILTIN_HOME_PACKAGES = setOf(
+        MIUI_HOME,
+        MIUI_PERSONAL_ASSISTANT,
+        ANDROID_QUICK_SEARCH_BOX,
+    )
+
+    private val ALLOWED_GATE_TOP_PACKAGES = setOf(
+        MODULE_PACKAGE,
+        SECURITY_CENTER,
+        SECURITY_CORE,
+    )
 
     /**
      * 「这次启动请给我小窗」——**模块自己的 App 进程**放在启动 Intent 上的标记。
@@ -82,6 +103,8 @@ object LightOpen {
     const val EXTRA_FREEFORM_REQUEST = "com.repl.bubbledrawer.extra.FREEFORM_REQUEST"
 
     // 动作常量自己写：纯逻辑层不 import android.content.Intent（单测里那是 stub）。
+    const val ACTION_MAIN = "android.intent.action.MAIN"
+    const val CATEGORY_LAUNCHER = "android.intent.category.LAUNCHER"
     const val ACTION_SEND = "android.intent.action.SEND"
     const val ACTION_SEND_MULTIPLE = "android.intent.action.SEND_MULTIPLE"
     const val ACTION_PROCESS_TEXT = "android.intent.action.PROCESS_TEXT"
@@ -153,18 +176,35 @@ object LightOpen {
         jumpTargets = decodeTargets(jumpListRaw),
     )
 
+    /** 是否属于内建的桌面/负一屏/全局搜索包名。 */
+    fun isBuiltInHomePackage(packageName: String?): Boolean =
+        packageName != null && packageName in BUILTIN_HOME_PACKAGES
+
+    /** 是否为标准桌面图标主入口启动（`ACTION_MAIN` + `CATEGORY_LAUNCHER`）。 */
+    fun isMainLauncherIntent(action: String?, categories: Collection<String>?): Boolean =
+        action == ACTION_MAIN && categories != null && CATEGORY_LAUNCHER in categories
+
     /**
-     * 「模块自己的 App 进程点名要小窗」（Intent 带 [EXTRA_FREEFORM_REQUEST]）该不该被闸门接管。
+     * 「模块自己的 App 进程点名要小窗」（Intent 带 [EXTRA_FREEFORM_REQUEST] 或一次性口令）该不该被闸门接管。
      *
-     * 只有两种情况不接管：目标解析不出来、目标就是安全中心的拦截框本身 —— 拦截框绝不能变成小窗
-     * （真机反馈 2026-10-14），真实目标在它后面那一次启动里，那一次会自己带着同一个标记。
+     * 护栏：
+     *  1. 目标解析不出来、或目标本身是安全中心的拦截框/分身选择框（[SECURITY_CENTER] / [SECURITY_CORE]）
+     *     → 不接管（拦截框绝不能变成小窗，真实目标在它后面那一次启动里）；
+     *  2. 当前前台是桌面（[isHomeTop]）或前台全屏应用既不是模块自身也不是安全中心确认框
+     *     → 绝不接管！防止残留口令或被复用的 Root Intent 在用户从桌面直接点图标时误触发小窗。
      *
      * 这条判定与「轻量打开」的六个开关无关（它跟的是设置页的「小窗启动」），所以不接收
      * [LightOpenSettings]，纯函数、有单测。
      */
-    fun requestedFreeformDecision(targetPackage: String?): LightOpenDecision = when {
+    fun requestedFreeformDecision(
+        targetPackage: String?,
+        topFullscreenPackage: String? = null,
+        isHomeTop: Boolean = false,
+    ): LightOpenDecision = when {
         targetPackage.isNullOrBlank() -> LightOpenDecision.LEAVE
-        targetPackage == SECURITY_CENTER -> LightOpenDecision.LEAVE
+        targetPackage == SECURITY_CENTER || targetPackage == SECURITY_CORE -> LightOpenDecision.LEAVE
+        isHomeTop || isBuiltInHomePackage(topFullscreenPackage) -> LightOpenDecision.LEAVE
+        topFullscreenPackage != null && topFullscreenPackage !in ALLOWED_GATE_TOP_PACKAGES -> LightOpenDecision.LEAVE
         else -> LightOpenDecision.FORCE_FREEFORM
     }
 
@@ -203,18 +243,22 @@ object LightOpen {
      * system_server 闸门判定（分享至应用 / 文本操作 / 应用间跳转）。
      *
      * 护栏（真机 ROM 之外我们自己加的，缺一个就会把"正常启动"当成"跳转"）：
-     *  1. 当前前台是桌面/负一屏/最近任务（`isHomeTop`）→ 不干预。桌面点图标、桌面文件夹、
-     *     负一屏卡片、HyperOS 最近任务卡片都落在这里；少了这条，全局小窗模式下桌面启动也会变
+     *  1. 当前前台是桌面/负一屏/最近任务（`isHomeTop` 或 [BUILTIN_HOME_PACKAGES]）→ 不干预。桌面点图标、
+     *     桌面文件夹、负一屏卡片、HyperOS 最近任务卡片都落在这里；少了这条，全局小窗模式下桌面启动也会变
      *     小窗（用户 2026-10 明确否掉）。
-     *  2. 前台包为空（锁屏/息屏/没有明确前台）→ 不干预。
-     *  3. 目标包 == 前台包（同应用内跳转）→ 不干预。ROM 自己也会拦，这里是双保险。
+     *  2. 本次启动本身是标准桌面主入口（`ACTION_MAIN` + `CATEGORY_LAUNCHER`）→ 不干预。兜住上滑回桌面
+     *     动画尚未结束时快速点桌面图标（此时 ATMS 的 `topFullscreenPackage` 仍停留在上一个全屏应用）或
+     *     桌面加锁/分身应用解锁后继续启动主入口的场景。
+     *  3. 前台包为空（锁屏/息屏/没有明确前台）→ 不干预。
+     *  4. 目标包 == 前台包（同应用内跳转）→ 不干预。ROM 自己也会拦，这里是双保险。
      *
      * @param action 目标 Intent 的 action
      * @param targetPackage 目标 Activity 的包名（ROM 内部叫 rawPackageName）
      * @param topFullscreenPackage ROM 传进来的"当前前台全屏应用包名"（排除小窗后的顶层 Activity 包名）
-     * @param isHomeTop [topFullscreenPackage] 是否属于 HOME 包集合
+     * @param isHomeTop [topFullscreenPackage] 或发起调用方是否属于 HOME 包集合
      * @param hasSelectedText 本次 Intent 是否带着"选中的文本"extra（文本操作那条规则要用，见 [isTextAction]）
      * @param fromTextClassifier 本次 Intent 是否来自系统 TextClassifier（选中文本后浮动工具栏条目）
+     * @param isMainLauncherIntent 本次 Intent 是否为 `ACTION_MAIN` + `CATEGORY_LAUNCHER` 桌面图标主入口
      */
     fun jumpDecision(
         settings: LightOpenSettings,
@@ -224,16 +268,18 @@ object LightOpen {
         isHomeTop: Boolean,
         hasSelectedText: Boolean = false,
         fromTextClassifier: Boolean = false,
+        isMainLauncherIntent: Boolean = false,
     ): LightOpenDecision {
         if (!settings.enabled) return LightOpenDecision.LEAVE
         if (topFullscreenPackage.isNullOrBlank()) return LightOpenDecision.LEAVE
-        if (isHomeTop) return LightOpenDecision.LEAVE
+        if (isHomeTop || isBuiltInHomePackage(topFullscreenPackage)) return LightOpenDecision.LEAVE
+        if (isMainLauncherIntent) return LightOpenDecision.LEAVE
         val target = targetPackage
         if (target.isNullOrBlank()) return LightOpenDecision.LEAVE
         if (target == topFullscreenPackage) return LightOpenDecision.LEAVE
-        // 系统拦截框（安全中心的"是否允许"）永远不参与小窗：它出现时，"目标应用"其实是它，
+        // 系统拦截框（安全中心的"是否允许"或分身选择框）永远不参与小窗：它出现时，"目标应用"其实是它，
         // 真正的目标在用户点"允许"之后的第二次启动里 —— 那一次才该由我们判定。
-        if (target == SECURITY_CENTER) return LightOpenDecision.LEAVE
+        if (target == SECURITY_CENTER || target == SECURITY_CORE) return LightOpenDecision.LEAVE
         // Gemini 启动蹦床（com.google.android.apps.bard → com.google.android.googlequicksearchbox）：
         // 本质是桌面点击 Gemini 时的入口蹦床，保持全屏。
         if (topFullscreenPackage == BARD_PACKAGE && target == GOOGLE_SEARCH_PACKAGE) {

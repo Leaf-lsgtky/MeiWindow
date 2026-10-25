@@ -184,6 +184,7 @@ object RemoteBridge {
             .putBoolean(RemotePrefs.KEY_FAN_LANDSCAPE_TWO_SWIPES, snap.fanLandscapeTwoSwipes)
             .putInt(RemotePrefs.KEY_FAN_ICON_DP, snap.fanIconDp)
             .putInt(RemotePrefs.KEY_FAN_ICON_SHAPE, snap.fanIconShape)
+            .putBoolean(RemotePrefs.KEY_CLONE_BADGE, snap.cloneBadge)
             .putBoolean(RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND, snap.fanAutoFillRecommend)
             .putBoolean(RemotePrefs.KEY_FAN_PRESSURE_PAGE_TURN, snap.fanPressurePageTurn)
             .putInt(RemotePrefs.KEY_FAN_PRESSURE_SENSITIVITY, snap.fanPressureSensitivity)
@@ -218,6 +219,20 @@ object RemoteBridge {
             .putBoolean(RemotePrefs.KEY_HOME_KEEP_FREEFORM, snap.homeKeepFreeform)
             .putBoolean(RemotePrefs.KEY_CONTACT_BAR, snap.contactBar)
             .putInt(RemotePrefs.KEY_CONTACT_BAR_MIN_WIDTH_PCT, snap.contactBarMinWidthPct)
+            // 「轻量打开」全套配置必须一起镜像：此前漏掉这组键会导致用户在本地关了轻量打开后，
+            // 远程组仍保留旧的 true 值，表现为「没开轻量打开也会拦截进小窗」。
+            .putBoolean(RemotePrefs.KEY_LIGHT_OPEN_ENABLED, snap.lightOpenEnabled)
+            .putBoolean(RemotePrefs.KEY_LIGHT_OPEN_NOTIF_PORTRAIT, snap.lightOpenNotifPortrait)
+            .putBoolean(RemotePrefs.KEY_LIGHT_OPEN_NOTIF_LANDSCAPE, snap.lightOpenNotifLandscape)
+            .putBoolean(RemotePrefs.KEY_LIGHT_OPEN_CONTROL_CENTER, snap.lightOpenControlCenter)
+            .putBoolean(RemotePrefs.KEY_LIGHT_OPEN_SHARE, snap.lightOpenShare)
+            .putBoolean(RemotePrefs.KEY_LIGHT_OPEN_TEXT, snap.lightOpenText)
+            .putBoolean(RemotePrefs.KEY_LIGHT_OPEN_JUMP, snap.lightOpenJump)
+            .putInt(RemotePrefs.KEY_LIGHT_OPEN_JUMP_MODE, snap.lightOpenJumpMode)
+            .putString(RemotePrefs.KEY_LIGHT_OPEN_JUMP_LIST, snap.lightOpenJumpList)
+            // 顺手清掉跨重启/跨会话残留的一次性小窗启动口令。
+            .remove(RemotePrefs.KEY_LAUNCH_PRIME)
+        localPrefs.edit().remove(RemotePrefs.KEY_LAUNCH_PRIME).apply()
         if (pinDecision.source != com.repl.bubbledrawer.data.PinsSync.Source.NONE) {
             editor.putString(com.repl.bubbledrawer.data.PrefsPinBackend.KEY, pinDecision.value)
             editor.putLong(com.repl.bubbledrawer.data.PrefsPinBackend.KEY_REV, pinDecision.rev)

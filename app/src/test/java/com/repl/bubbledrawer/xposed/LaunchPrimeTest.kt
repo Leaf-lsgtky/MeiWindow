@@ -42,4 +42,26 @@ class LaunchPrimeTest {
         // 但也不能长到"下一次从别处打开同一个应用"都还在窗口里。
         assertEquals(true, RemotePrefs.LAUNCH_PRIME_TTL_MS <= 10_000L)
     }
+
+    @Test
+    fun `activeLaunchPrime rejects expired consumed and post-reboot stale tokens`() {
+        val createdAt = 100_000L
+        val deadline = createdAt + RemotePrefs.LAUNCH_PRIME_TTL_MS
+        val raw = RemotePrefs.encodeLaunchPrime("com.tencent.mm", deadline)
+
+        // 窗口内且未消费 → 命中
+        assertEquals("com.tencent.mm", RemotePrefs.activeLaunchPrime(raw, nowElapsedMs = createdAt + 1_000L))
+        assertEquals("com.tencent.mm", RemotePrefs.activeLaunchPrime(raw, nowElapsedMs = deadline))
+
+        // 已消费过同一条口令 → 拒绝（防止 8 秒内回桌面再点图标仍变小窗）
+        assertNull(RemotePrefs.activeLaunchPrime(raw, nowElapsedMs = createdAt + 1_000L, consumedRaw = raw))
+
+        // 已过期 → 拒绝
+        assertNull(RemotePrefs.activeLaunchPrime(raw, nowElapsedMs = deadline + 1L))
+
+        // 跨重启残留：重启前开机 20 小时写入了较大的 deadline，重启后 elapsedRealtime 从 0 重新开始计时
+        val preRebootDeadline = 20L * 3600L * 1000L + RemotePrefs.LAUNCH_PRIME_TTL_MS
+        val staleAcrossReboot = RemotePrefs.encodeLaunchPrime("com.tencent.mm", preRebootDeadline)
+        assertNull(RemotePrefs.activeLaunchPrime(staleAcrossReboot, nowElapsedMs = 30_000L))
+    }
 }

@@ -63,10 +63,14 @@ class LightOpenGate(
     private var loader: ClassLoader? = null
 
     @Volatile
-    private var homePackages: Set<String> = emptySet()
+    private var homePackages: Set<String> = LightOpen.BUILTIN_HOME_PACKAGES
 
     @Volatile
     private var homePackagesResolvedAt: Long = 0L
+
+    /** 最近一次已消费的 [RemotePrefs.KEY_LAUNCH_PRIME] 原始字符串，保证同一条口令在进程内只生效一次。 */
+    @Volatile
+    private var consumedPrimeRaw: String? = null
 
     /** `ActivityTaskSupervisorImpl.MIUI_APP_LOCK_ACTIVITY_NAME`：应用锁穿透用，取不到就算了。 */
     private val appLockActivity: String? by lazy {
@@ -173,12 +177,22 @@ class LightOpenGate(
         //   2. 一次性口令：安全中心的「xx 想要打开 xx」拦截框若重造 Intent 会丢 extras，
         //      而用户点「允许」之后的**第二次**启动才是真正要落窗的那一次 —— 只剩它能认出来。
         //
-        // 这两条判定故意放在**所有开关之前**：跟的是设置页的「小窗启动」，与「轻量打开」那六个
-        // 开关无关。也故意不看 `topPackage`：拦截框确认之后前台是 `com.miui.securitycenter`。
+        // 这两条判定放在「轻量打开」开关之前（跟的是设置页的「小窗启动」），但必须严格限制：
+        //   - 前台只能是模块自身或安全中心确认框（绝不能在桌面点图标时触发）；
+        //   - 命中后立刻剥离 Intent 标记并消费口令，防止残留到 Task 的 Root Intent 或 8 秒内回桌面复发。
         val target = rawTargetPackage(info, intent)
+        val top = topPackage?.takeIf { it.isNotEmpty() }
+        val isHomeTop = (top != null && isHomePackage(top)) || isCallerHomePackage()
         val marker = intent?.getBooleanExtra(LightOpen.EXTRA_FREEFORM_REQUEST, false) == true
         if (marker && target != null) {
-            if (LightOpen.requestedFreeformDecision(target) == LightOpenDecision.FORCE_FREEFORM) {
+            val reqDecision = LightOpen.requestedFreeformDecision(
+                targetPackage = target,
+                topFullscreenPackage = top,
+                isHomeTop = isHomeTop,
+            )
+            if (reqDecision == LightOpenDecision.FORCE_FREEFORM) {
+                runCatching { intent.removeExtra(LightOpen.EXTRA_FREEFORM_REQUEST) }
+                consumeCurrentPrime()
                 module.log(
                     Log.INFO,
                     TAG,
@@ -186,13 +200,23 @@ class LightOpenGate(
                 )
                 return true
             }
-            // 拦截框自己：不接管（它绝不能变成小窗）。
-            return null
+            if (target != LightOpen.SECURITY_CENTER && target != LightOpen.SECURITY_CORE) {
+                // 非拦截框却被拒绝（例如从桌面复用了旧 Intent）：剥离残留标记并放行原生路径。
+                runCatching { intent.removeExtra(LightOpen.EXTRA_FREEFORM_REQUEST) }
+            } else {
+                // 拦截框自己：不接管（它绝不能变成小窗），保留标记给后续真实目标。
+                return null
+            }
         }
-        val primed = primeTarget()
-        if (primed != null && target != null && primed == target &&
-            LightOpen.requestedFreeformDecision(target) == LightOpenDecision.FORCE_FREEFORM
+        val (primedRaw, primedTarget) = primeTarget() ?: (null to null)
+        if (primedTarget != null && target != null && primedTarget == target &&
+            LightOpen.requestedFreeformDecision(
+                targetPackage = target,
+                topFullscreenPackage = top,
+                isHomeTop = isHomeTop,
+            ) == LightOpenDecision.FORCE_FREEFORM
         ) {
+            consumedPrimeRaw = primedRaw
             module.log(
                 Log.INFO,
                 TAG,
@@ -206,7 +230,6 @@ class LightOpenGate(
         if (!settings.enabled) return null
         if (!settings.appJump && !settings.shareToApp && !settings.textAction) return null
 
-        val top = topPackage?.takeIf { it.isNotEmpty() }
         // 「文本操作」判定：
         // 1. 系统 TextClassifier 标记（选中文本后弹出的编辑条/浮动菜单条目，带 EXTRA_FROM_TEXT_CLASSIFIER）
         // 2. Intent 显式携带选中文本 extra（EXTRA_PROCESS_TEXT / EXTRA_TEXT / EXTRA_HTML_TEXT）
@@ -217,14 +240,16 @@ class LightOpenGate(
                 intent.hasExtra(Intent.EXTRA_TEXT) ||
                 intent.hasExtra(Intent.EXTRA_HTML_TEXT)
             )
+        val isMainLauncher = LightOpen.isMainLauncherIntent(intent?.action, intent?.categories)
         val decision = LightOpen.jumpDecision(
             settings = settings,
             action = intent?.action,
             targetPackage = target,
             topFullscreenPackage = top,
-            isHomeTop = top != null && isHomePackage(top),
+            isHomeTop = isHomeTop,
             hasSelectedText = hasSelectedText,
             fromTextClassifier = fromClassifier,
+            isMainLauncherIntent = isMainLauncher,
         )
         // 探针：文本开关开着时，把"像文本操作"的每一次都记下来（不管最后判成什么），
         // 这样"误伤"和"该生效却没生效"都能从日志里直接对上。
@@ -282,18 +307,27 @@ class LightOpenGate(
     }
 
     /**
-     * 一次性口令里的目标包名（没过期才有值，见 [RemotePrefs.KEY_LAUNCH_PRIME]）。
+     * 一次性口令里的原始串与目标包名（未消费且在有效窗口内才有值，见 [RemotePrefs.activeLaunchPrime]）。
      *
      * 直接读 prefs 而不是 [LightOpenWatcher] 的快照：口令只活 8 秒，而快照最长可能旧 2 秒 ——
      * 那正好是这条通道最需要新鲜的窗口。
      */
-    private fun primeTarget(): String? = runCatching {
-        val (pkg, deadline) = RemotePrefs.decodeLaunchPrime(
-            prefs.getString(RemotePrefs.KEY_LAUNCH_PRIME, null),
+    private fun primeTarget(): Pair<String, String>? = runCatching {
+        val raw = prefs.getString(RemotePrefs.KEY_LAUNCH_PRIME, null) ?: return null
+        val pkg = RemotePrefs.activeLaunchPrime(
+            raw = raw,
+            nowElapsedMs = android.os.SystemClock.elapsedRealtime(),
+            consumedRaw = consumedPrimeRaw,
         ) ?: return null
-        if (android.os.SystemClock.elapsedRealtime() > deadline) return null
-        pkg
+        raw to pkg
     }.getOrNull()
+
+    /** 当首选通道 `via=intent` 命中时，把伴随写入的那条口令一并标记为已消费。 */
+    private fun consumeCurrentPrime() {
+        runCatching {
+            prefs.getString(RemotePrefs.KEY_LAUNCH_PRIME, null)?.let { consumedPrimeRaw = it }
+        }
+    }
 
     /**
      * ROM 的 `getRawPackageName`：应用锁场景下 Intent 指向的是应用锁 Activity，真实目标在
@@ -313,25 +347,41 @@ class LightOpenGate(
 
     /** 当前前台包是不是桌面（含第三方桌面）/负一屏这类 HOME 角色。60 秒缓存一次。 */
     private fun isHomePackage(packageName: String): Boolean {
+        if (LightOpen.isBuiltInHomePackage(packageName)) return true
         val now = System.currentTimeMillis()
         if (now - homePackagesResolvedAt > HOME_CACHE_MS) {
-            homePackages = resolveHomePackages()
-            homePackagesResolvedAt = now
+            val resolved = resolveHomePackages()
+            if (resolved.isNotEmpty()) {
+                homePackages = resolved
+                homePackagesResolvedAt = now
+            }
         }
         return packageName in homePackages
     }
 
+    /**
+     * 本次 `startActivity` 的直接 Binder 调用方是否属于桌面进程。
+     *
+     * 上滑回桌面动画尚未结束时，ATMS 的 `fullscreenPackageName`（即 `topPackage`）仍停留在上一个
+     * 全屏应用，但此时用户在桌面点图标发起的 Binder 调用方已经是 `com.miui.home`（或第三方桌面）。
+     */
+    private fun isCallerHomePackage(): Boolean = runCatching {
+        val uid = android.os.Binder.getCallingUid()
+        if (uid < 10_000) return false
+        val context = systemContext() ?: return false
+        val pkgs = context.packageManager.getPackagesForUid(uid) ?: return false
+        pkgs.any { isHomePackage(it) }
+    }.getOrDefault(false)
+
     private fun resolveHomePackages(): Set<String> = runCatching {
         val context = systemContext() ?: return emptySet()
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        val result = LinkedHashSet<String>()
+        val result = LinkedHashSet<String>(LightOpen.BUILTIN_HOME_PACKAGES)
         val resolved: List<ResolveInfo> = context.packageManager
             .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
         for (info in resolved) {
             info.activityInfo?.packageName?.let(result::add)
         }
-        // MIUI 桌面/负一屏/最近任务都在 com.miui.home 下；显式带上，防止 query 结果被 OEM 收窄后漏掉。
-        result.add(MIUI_HOME)
         result
     }.getOrDefault(emptySet())
 
@@ -374,7 +424,6 @@ class LightOpenGate(
 
     private companion object {
         const val TAG = "LightOpenGate"
-        const val MIUI_HOME = "com.miui.home"
         const val HOME_CACHE_MS = 60_000L
     }
 }

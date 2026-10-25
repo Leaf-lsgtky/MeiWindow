@@ -206,6 +206,30 @@ object RemotePrefs {
         return pkg to deadline
     }
 
+    /**
+     * 校验一次性口令在当前时刻是否有效，返回有效口令的目标包名（无效返回 null）。
+     *
+     * 必须同时拦住三件事：
+     *  1. 已被消费过的同一条口令（[consumedRaw]）：`XSharedPreferences` 在 system_server 侧只读，
+     *     必须在内存里记下已消费的原串，保证「一次性」语义，防止 8 秒内回桌面再点图标仍命中；
+     *  2. 已过期的口令（`nowElapsedMs > deadline`）；
+     *  3. 跨重启残留的旧口令（`deadline - nowElapsedMs > LAUNCH_PRIME_TTL_MS`）：`elapsedRealtime`
+     *     在手机重启后从 0 重新计时，若重启前落盘了一个较大的 deadline（如开机 20 小时后写的），
+     *     重启后单纯比 `now <= deadline` 会在接下来 20 小时内恒为真，导致即使没开轻量打开、从桌面
+     *     直接打开该应用也会被强制变小窗。
+     */
+    fun activeLaunchPrime(
+        raw: String?,
+        nowElapsedMs: Long,
+        consumedRaw: String? = null,
+    ): String? {
+        if (raw.isNullOrEmpty() || raw == consumedRaw) return null
+        val (pkg, deadline) = decodeLaunchPrime(raw) ?: return null
+        val remaining = deadline - nowElapsedMs
+        if (remaining < 0L || remaining > LAUNCH_PRIME_TTL_MS) return null
+        return pkg
+    }
+
     /** 扇形图标大小（dp，默认 = launcher_app_item_icon_width 44dp）。 */
     const val KEY_FAN_ICON_DP = "fan_icon_dp"
     const val DEFAULT_FAN_ICON_DP = 44
