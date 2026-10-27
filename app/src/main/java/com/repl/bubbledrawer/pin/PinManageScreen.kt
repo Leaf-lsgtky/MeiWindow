@@ -148,7 +148,11 @@ fun PinManageScreen(
     // `pins=0`：长按只放大、怎么拖都不动（用户 2026-10-16 的反馈）。
     val currentVisibleCells = rememberUpdatedState(visibleCells)
     val drag = remember(model) {
-        PinDragState(model) { currentVisibleCells.value.filterIsInstance<Cell.Pin>() }
+        PinDragState(
+            model = model,
+            visiblePins = { currentVisibleCells.value.filterIsInstance<Cell.Pin>() },
+            visibleFunctions = { model.pinnedFunctions },
+        )
     }
     val title = stringResource(R.string.slide_launch_app_settings_title)
     // 顶部共用收藏区在功能页上装的是「已选功能」，提示语跟着换 —— 否则功能页写着「暂无收藏应用」。
@@ -864,6 +868,11 @@ private fun SharedPinsSection(
     // 拖拽中的那一格：数据给"最上层再画一遍"用（见下面的 OverlayAt）。
     val ghostKey = drag.draggingKey
     val ghostApp = if (ghostKey == null) null else pinnedApps.firstOrNull { cellKey(it) == ghostKey }?.app
+    val ghostFunction = if (ghostKey == null || !ghostKey.startsWith(FUNCTION_DRAG_PREFIX)) {
+        null
+    } else {
+        pinnedFns.firstOrNull { functionDragKey(it) == ghostKey }
+    }
     val ghostSize = drag.draggingSize()
 
     // 外面这层 Box 只是给"拖拽图层"一个与收藏区重合的坐标原点（`centers` 也是这个坐标系），
@@ -944,14 +953,14 @@ private fun SharedPinsSection(
                                                 onLaunchShortcut?.invoke(entry.item)
                                             }
                                         }
-                                        ShortcutCell(
+                                        PinnedFunctionCell(
                                             item = entry.item,
+                                            drag = drag,
+                                            manageMode = model.manageMode,
                                             iconDp = iconDp,
                                             textSp = textSp,
                                             onTap = onTap,
-                                            showAppBadge = true, // 需求 6: 收藏的功能左下角显示所属应用图标
-                                            showBadge = model.manageMode,
-                                            isPinned = true,
+                                            sectionCoordinates = sectionCoordinates,
                                         )
                                     }
                                 }
@@ -971,7 +980,7 @@ private fun SharedPinsSection(
         // 拖拽中的那一格画在**最上层**：格子是按行嵌套的（`Row` 里的 `Box` 里才是 `PinCell`），
         // `zIndex` 只管同一层的兄弟，跨行根本管不到 —— 用户 2026-10-16：「手指拖动的图标图层在
         // 动画下面」。所以在这里再画一遍（网格里那一格是透明的占位），它必然盖住所有格子与让位动画。
-        if (ghostApp != null && ghostSize != null) {
+        if ((ghostApp != null || ghostFunction != null) && ghostSize != null) {
             val widthDp = with(density) { ghostSize.width.toDp() }
             val heightDp = with(density) { ghostSize.height.toDp() }
             // 位置用 lambda 传：跟手位移是快照状态，在测量里读才不会每帧重组整个收藏区
@@ -987,15 +996,27 @@ private fun SharedPinsSection(
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    AppTile(
-                        app = ghostApp,
-                        manageMode = model.manageMode,
-                        pinned = true,
-                        iconDp = iconDp,
-                        textSp = textSp,
-                        cloneBadge = model.cloneBadge,
-                        onTap = {},
-                    )
+                    if (ghostApp != null) {
+                        AppTile(
+                            app = ghostApp,
+                            manageMode = model.manageMode,
+                            pinned = true,
+                            iconDp = iconDp,
+                            textSp = textSp,
+                            cloneBadge = model.cloneBadge,
+                            onTap = {},
+                        )
+                    } else if (ghostFunction != null) {
+                        ShortcutCell(
+                            item = ghostFunction,
+                            iconDp = iconDp,
+                            textSp = textSp,
+                            onTap = {},
+                            showAppBadge = true,
+                            showBadge = model.manageMode,
+                            isPinned = true,
+                        )
+                    }
                 }
             }
         }
@@ -1028,6 +1049,11 @@ private fun cellKey(cell: Cell): String = when (cell) {
     is Cell.App -> "app:${cell.app.packageName}#${cell.app.userId}@${cell.section}"
     is Cell.Expand -> "expand:${cell.section}"
 }
+
+/** 功能格在拖拽状态里的 key（不能和应用的 `pin:` 撞）。 */
+private const val FUNCTION_DRAG_PREFIX = "fn:"
+
+private fun functionDragKey(item: ShortcutItem): String = "$FUNCTION_DRAG_PREFIX${item.pinKey}"
 
 /**
  * The overlay panel's 56dp look-alike bar: title left, search + listview icon buttons right.
@@ -1330,6 +1356,66 @@ private fun PinCell(
     }
 }
 
+/**
+ * ★ pinned function cell: same tile as [ShortcutCell] plus the long-press drag transform.
+ *
+ * 功能收藏和应用收藏的槽位是分开的（功能段在应用段之后），但拖拽的注册/让位动画与 [PinCell]
+ * 共用同一个 [PinDragState]；key 加 `fn:` 前缀，避免和应用的 `pin:` 撞车。
+ */
+@Composable
+private fun PinnedFunctionCell(
+    item: ShortcutItem,
+    drag: PinDragState,
+    manageMode: Boolean,
+    iconDp: Int,
+    textSp: Int,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+    sectionCoordinates: LayoutCoordinates? = null,
+) {
+    val key = functionDragKey(item)
+    val isDragging = drag.draggingKey == key
+    var centerInParent by remember { mutableStateOf(Offset.Zero) }
+    val slot = drag.slotOf(key)
+    val startShift = remember(key, slot, isDragging) {
+        if (isDragging) null else drag.shiftOf(key)
+    }
+    val progress = remember(key, slot, isDragging) { Animatable(if (startShift == null) 1f else 0f) }
+    LaunchedEffect(key, slot, isDragging) {
+        if (startShift != null) progress.animateTo(1f, animationSpec = tween(SLOT_ANIM_MS))
+    }
+
+    Box(
+        modifier = modifier
+            .onGloballyPositioned { coords ->
+                val rootPos = if (sectionCoordinates != null && sectionCoordinates.isAttached && coords.isAttached) {
+                    sectionCoordinates.localPositionOf(coords, Offset.Zero)
+                } else {
+                    coords.positionInParent()
+                }
+                centerInParent = rootPos + Offset(coords.size.width / 2f, coords.size.height / 2f)
+                drag.register(key, centerInParent, Size(coords.size.width.toFloat(), coords.size.height.toFloat()))
+            }
+            .graphicsLayer {
+                val remaining = 1f - progress.value
+                translationX = if (isDragging) 0f else (startShift?.x ?: 0f) * remaining
+                translationY = if (isDragging) 0f else (startShift?.y ?: 0f) * remaining
+                alpha = if (isDragging) 0f else 1f
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        ShortcutCell(
+            item = item,
+            iconDp = iconDp,
+            textSp = textSp,
+            onTap = onTap,
+            showAppBadge = true,
+            showBadge = manageMode,
+            isPinned = true,
+        )
+    }
+}
+
 /** Regular (unpinned) cell */
 @Composable
 private fun AppCell(
@@ -1421,10 +1507,16 @@ private class PinDragState(
      * 只在首次组合跑一次，直接捕获一个局部变量会把那一份**永远冻住**。
      */
     private val visiblePins: () -> List<Cell.Pin>,
+    /** 已选功能（显示顺序 = [PinManageModel.pinnedFunctions]）。 */
+    private val visibleFunctions: () -> List<ShortcutItem>,
 ) {
 
     var draggingKey: String? by mutableStateOf(null)
         private set
+
+    /** 当前拖的是功能格还是应用格；两者的落点列表和持久化链不同。 */
+    private var draggingIsFunction = false
+    private var draggingFunctionKey = ""
 
     val isDragging: Boolean get() = draggingKey != null
 
@@ -1475,7 +1567,12 @@ private class PinDragState(
     /** 这一格现在在哪个槽位（不在拖拽中返回 -1）—— 让位动画的"换了位置没有"就用它判断。 */
     fun slotOf(key: String): Int {
         if (draggingKey == null) return -1
-        return visiblePins().indexOfFirst { cellKey(it) == key }
+        val keys = if (key.startsWith(FUNCTION_DRAG_PREFIX)) {
+            visibleFunctions().map { functionDragKey(it) }
+        } else {
+            visiblePins().map { cellKey(it) }
+        }
+        return keys.indexOfFirst { it == key }
     }
 
     /** 这一格的让位位移（旧 − 新）；没挪过 = null。纯读，组合期调用。 */
@@ -1499,16 +1596,22 @@ private class PinDragState(
 
     fun onDragStart(position: Offset) {
         val pins = visiblePins()
+        val functions = visibleFunctions()
+        val pinKeys = pins.map { cellKey(it) }
+        val functionKeys = functions.map { functionDragKey(it) }
         // 落点表只留"现在真的画着"的格子：取消收藏、折叠到 20 个之外的格子不会自己注销，
         // 留着就是抓得住的幽灵格子（先清再抓，免得抓到一个已经不在的）。
-        val alive = pins.mapTo(HashSet()) { cellKey(it) }
+        val alive = (pinKeys + functionKeys).toHashSet()
         centers.keys.retainAll(alive)
         sizes.keys.retainAll(alive)
         val key = grabAt(position) ?: return
         draggingKey = key
-        initialSlots = pins.mapNotNull { centers[cellKey(it)] }
-        val myPos = pins.indexOfFirst { cellKey(it) == key }
-        if (myPos >= 0 && initialSlots.size == pins.size) {
+        draggingIsFunction = key.startsWith(FUNCTION_DRAG_PREFIX)
+        draggingFunctionKey = if (draggingIsFunction) key.removePrefix(FUNCTION_DRAG_PREFIX) else ""
+        val dragKeys = if (draggingIsFunction) functionKeys else pinKeys
+        initialSlots = dragKeys.mapNotNull { centers[it] }
+        val myPos = dragKeys.indexOfFirst { it == key }
+        if (myPos >= 0 && initialSlots.size == dragKeys.size) {
             currentSlot = myPos
             initialCenter = initialSlots[myPos]
         } else {
@@ -1521,9 +1624,9 @@ private class PinDragState(
         translationY = 0f
         // 「长按只放大、怎么拖都不动」这类反馈唯一能事后核对的东西：`slots` 必须等于 `pins`
         // （`slots=0` 就是落点表是空的 —— 拖拽只能在原地放大，一个格子都换不了）。用户 2026-10-16。
-        val line = "PIN_DRAG_START key=$key pins=${pins.size} slots=${initialSlots.size} " +
-            "centers=${centers.size} myPos=$myPos"
-        if (myPos >= 0 && initialSlots.size == pins.size) {
+        val line = "PIN_DRAG_START key=$key kind=${if (draggingIsFunction) "function" else "app"} " +
+            "items=${dragKeys.size} slots=${initialSlots.size} centers=${centers.size} myPos=$myPos"
+        if (myPos >= 0 && initialSlots.size == dragKeys.size) {
             android.util.Log.i("BubbleDrawer", line)
         } else {
             android.util.Log.w("BubbleDrawer", "$line SLOTS_MISMATCH")
@@ -1549,25 +1652,42 @@ private class PinDragState(
         }
 
         if (bestSlot != currentSlot) {
-            val key = draggingKey ?: return
-            val fromIndexInCells = model.cells.indexOfFirst { it is Cell.Pin && cellKey(it) == key }
-            val pinIndices = model.cells.indices.filter { model.cells[it] is Cell.Pin }
-            if (fromIndexInCells >= 0 && bestSlot in pinIndices.indices) {
-                // 换位前后各取一份顺序，才能算清"谁给谁让了位"：只知道自己挪到哪不够 —— 被推着走的
-                // 那些格子也要各自滑一格（用户 2026-10-16 要的就是这个）。
-                // 这里读 `model.visibleCells` 而不是组合用的 `visibleCells`：后者要等下一次组合才更新。
-                val before = model.visibleCells.filterIsInstance<Cell.Pin>().map { cellKey(it) }
-                val toIndexInCells = pinIndices[bestSlot]
-                model.movePin(fromIndexInCells, toIndexInCells)
-                val after = model.visibleCells.filterIsInstance<Cell.Pin>().map { cellKey(it) }
+            if (draggingIsFunction) {
+                val functions = visibleFunctions()
+                val target = functions.getOrNull(bestSlot) ?: return
+                val fromKey = draggingFunctionKey
+                val before = functions.map { it.pinKey }
+                model.moveFunctionPin(fromKey, target.pinKey)
+                val after = model.pinnedFunctions.map { it.pinKey }
                 for ((index, movedKey) in after.withIndex()) {
                     val previous = before.indexOf(movedKey)
                     if (previous < 0 || previous == index) continue
                     val from = initialSlots.getOrNull(previous) ?: continue
                     val to = initialSlots.getOrNull(index) ?: continue
-                    pendingShifts[movedKey] = from - to
+                    pendingShifts[FUNCTION_DRAG_PREFIX + movedKey] = from - to
                 }
                 currentSlot = bestSlot
+            } else {
+                val key = draggingKey ?: return
+                val fromIndexInCells = model.cells.indexOfFirst { it is Cell.Pin && cellKey(it) == key }
+                val pinIndices = model.cells.indices.filter { model.cells[it] is Cell.Pin }
+                if (fromIndexInCells >= 0 && bestSlot in pinIndices.indices) {
+                    // 换位前后各取一份顺序，才能算清"谁给谁让了位"：只知道自己挪到哪不够 —— 被推着走的
+                    // 那些格子也要各自滑一格（用户 2026-10-16 要的就是这个）。
+                    // 这里读 `model.visibleCells` 而不是组合用的 `visibleCells`：后者要等下一次组合才更新。
+                    val before = model.visibleCells.filterIsInstance<Cell.Pin>().map { cellKey(it) }
+                    val toIndexInCells = pinIndices[bestSlot]
+                    model.movePin(fromIndexInCells, toIndexInCells)
+                    val after = model.visibleCells.filterIsInstance<Cell.Pin>().map { cellKey(it) }
+                    for ((index, movedKey) in after.withIndex()) {
+                        val previous = before.indexOf(movedKey)
+                        if (previous < 0 || previous == index) continue
+                        val from = initialSlots.getOrNull(previous) ?: continue
+                        val to = initialSlots.getOrNull(index) ?: continue
+                        pendingShifts[movedKey] = from - to
+                    }
+                    currentSlot = bestSlot
+                }
             }
         }
 
@@ -1577,17 +1697,24 @@ private class PinDragState(
     }
 
     fun onDragEnd() {
-        if (draggingKey == null) return
-        val key = draggingKey
+        val key = draggingKey ?: return
+        val wasFunction = draggingIsFunction
         draggingKey = null
+        draggingIsFunction = false
+        draggingFunctionKey = ""
         translationX = 0f
         translationY = 0f
         initialSlots = emptyList()
         pendingShifts.clear()
-        model.persistOrder()
+        if (wasFunction) {
+            model.persistFunctionOrder()
+        } else {
+            model.persistOrder()
+        }
         android.util.Log.i(
             "BubbleDrawer",
-            "PIN_DRAG_END key=$key index=${model.cells.indexOfFirst { it is Cell.Pin && cellKey(it) == key }}",
+            "PIN_DRAG_END key=$key kind=${if (wasFunction) "function" else "app"} " +
+                "index=${if (wasFunction) model.functionPins.indexOf(key.removePrefix(FUNCTION_DRAG_PREFIX)) else model.cells.indexOfFirst { it is Cell.Pin && cellKey(it) == key }}",
         )
     }
 }

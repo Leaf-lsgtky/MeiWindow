@@ -254,4 +254,30 @@ class PinManageModelFunctionTest {
         )
         assertEquals("已选里没有命中的项就不显示", emptyList<String>(), model.pinnedFunctions.map { it.pinKey })
     }
+
+    @Test
+    fun functionDragReordersAndPersistsOnlyOnDragEnd() {
+        var stored = listOf(wechatScan.pinKey, wechatPay.pinKey, alipayScan.pinKey)
+        val model = model(
+            functionPinsOf = { stored },
+            onFunctionOrderChange = { stored = it },
+        )
+        model.refreshFunctionPins()
+
+        model.moveFunctionPin(wechatScan.pinKey, alipayScan.pinKey)
+
+        assertEquals(
+            "功能格在功能收藏段内换位，应用段不受影响",
+            listOf(wechatPay.pinKey, alipayScan.pinKey, wechatScan.pinKey),
+            model.functionPins,
+        )
+        assertEquals(
+            "拖动过程中不能每帧写 prefs，顺序要等松手才落盘",
+            listOf(wechatScan.pinKey, wechatPay.pinKey, alipayScan.pinKey),
+            stored,
+        )
+
+        model.persistFunctionOrder()
+        assertEquals(listOf(wechatPay.pinKey, alipayScan.pinKey, wechatScan.pinKey), stored)
+    }
 }

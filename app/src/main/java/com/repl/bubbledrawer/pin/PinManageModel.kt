@@ -87,6 +87,7 @@ class PinManageModel(
         // 同一个文件里），监听者回头再读一次可能拿到撕裂的那一对，于是刚点的这一下被旧值顶掉 ——
         // 用户看到的是「第二次开始点了没反应」。写回之后这里再断言一次，页面与手一致。
         functionPins = next
+        functionOrderDirty = false
         onFunctionOrderChange(next)
         functionPins = next
     }
@@ -370,7 +371,10 @@ class PinManageModel(
     @MainThread
     fun toggleManageMode() {
         manageMode = !manageMode
-        if (!manageMode && orderDirty) persistOrder()
+        if (!manageMode) {
+            if (orderDirty) persistOrder()
+            if (functionOrderDirty) persistFunctionOrder()
+        }
         rebuild()
     }
 
@@ -378,6 +382,7 @@ class PinManageModel(
 
     /** 标记是否发生过拖拽换位：只有真拖过才需要在退出管理模式时补写顺序，避免把刚点的收藏覆盖掉。 */
     private var orderDirty = false
+    private var functionOrderDirty = false
 
     /** ★ drag reorder: move the Pin at [from] to [to] (both Pin positions, cells-indexed). */
     fun movePin(from: Int, to: Int) {
@@ -396,6 +401,29 @@ class PinManageModel(
         orderDirty = false
         val order = cells.filterIsInstance<Cell.Pin>().map { PinnedRef(it.app.packageName, it.app.userId) }
         if (order.isNotEmpty()) onOrderChange(order)
+    }
+
+    /**
+     * ★ 已选功能的拖拽排序。
+     *
+     * 应用收藏和功能收藏的持久化是两条链（`PinnedRef` / `functionPins`），不能把它们混成一个
+     * 下标移动：功能格只在功能段内换位，应用段保持原顺序。拖动结束由 [persistFunctionOrder]
+     * 统一落盘，避免每一帧都写远程 prefs。
+     */
+    fun moveFunctionPin(fromKey: String, toKey: String) {
+        if (fromKey == toKey) return
+        val from = functionPins.indexOf(fromKey)
+        val to = functionPins.indexOf(toKey)
+        if (from < 0 || to < 0) return
+        val mutable = functionPins.toMutableList()
+        mutable.add(to, mutable.removeAt(from))
+        functionPins = mutable
+        functionOrderDirty = true
+    }
+
+    fun persistFunctionOrder() {
+        functionOrderDirty = false
+        onFunctionOrderChange(functionPins)
     }
 
     fun togglePin(app: BubbleApp) {
