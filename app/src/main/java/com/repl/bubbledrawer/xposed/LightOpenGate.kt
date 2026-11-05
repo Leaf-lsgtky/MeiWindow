@@ -98,6 +98,8 @@ class LightOpenGate(
         val method = targetMethod
         if (method == null) {
             module.log(Log.WARN, TAG, "LIGHT_OPEN_GATE_TARGET_UNAVAILABLE")
+            runCatching { installAvoidTargetFilter() }
+                .onFailure { module.log(Log.WARN, TAG, "AVOID_FILTER_INSTALL_FAILED", it) }
             return
         }
         val settings = watcher.current()
@@ -120,6 +122,154 @@ class LightOpenGate(
                 "share=${settings.shareToApp} text=${settings.textAction}",
         )
         installStormBreaker()
+        runCatching { installAvoidTargetFilter() }
+            .onFailure { module.log(Log.WARN, TAG, "AVOID_FILTER_INSTALL_FAILED", it) }
+    }
+
+    /** 当前 `getFreeFormStackToAvoid` 调用正在给哪个包摆位（同线程，供谓词钩子读取）。 */
+    private val avoidingFor = ThreadLocal<String?>()
+
+    /**
+     * 「小窗莫名往右下偏」的根因修复（system_server）。
+     *
+     * ROM 的避让源 `MiuiFreeFormManagerService.getFreeFormStackToAvoid(displayId, packageName)`
+     * **完全不看 packageName**，谓词 `lambda$getFreeFormStackToAvoid$N` 也只看
+     * `inFreeformWindowingMode() && !inPinMode()`。于是：
+     *  1. 跳板/闪屏 Activity A 以小窗启动后立刻在新任务里拉起真正的 B
+     *     （`MiuiFreeformServiceImpl.addLaunchFreeformActivityOptionIfNeed` →
+     *     `getActivityOptions(ctx, pkg, true)` → `getAvoidFreeformBounds`），A 自己那个刚建、
+     *     还没画出一帧、马上就 finish 的小窗被当成「已有小窗」，B 被推 78dp/44dp；
+     *  2. 正在关闭（退出动画期间仍是 freeform）或被压到桌面后面的小窗同样会被选中。
+     *
+     * 这里给谓词补上 ROM 在 `getAllFreeFormStackInfosOnDisplay` 里本来就用的那套条件，并排除
+     * 正在摆放的同一个包；对返回值再做一次兜底校验（谓词名换了的 ROM 也能生效）。
+     * 「禁止小窗偏移」开着时直接返回 null。
+     */
+    private fun installAvoidTargetFilter() {
+        val svc = loadClass("com.android.server.wm.MiuiFreeFormManagerService") ?: return
+        val main = svc.declaredMethods.firstOrNull {
+            it.name == "getFreeFormStackToAvoid" && it.parameterCount == 2
+        }
+        if (main == null) {
+            module.log(Log.WARN, TAG, "AVOID_FILTER_TARGET_UNAVAILABLE")
+            return
+        }
+        module.hook(main)
+            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+            .setId("bubbledrawer.freeform.avoid_source")
+            .intercept { chain ->
+                if (runCatching { RemotePrefs.read(prefs).flymeFreeformNoOffset }.getOrDefault(false)) {
+                    return@intercept null
+                }
+                val pkg = chain.args.getOrNull(1) as? String
+                val previous = avoidingFor.get()
+                avoidingFor.set(pkg)
+                try {
+                    val result = chain.proceed() ?: return@intercept null
+                    if (!stackInfoUsable(result, pkg)) {
+                        module.log(Log.INFO, TAG, "AVOID_SOURCE_DROPPED for=$pkg info=${describeStackInfo(result)}")
+                        null
+                    } else {
+                        result
+                    }
+                } finally {
+                    avoidingFor.set(previous)
+                }
+            }
+        var lambdas = 0
+        svc.declaredMethods
+            .filter { it.name.startsWith("lambda\$getFreeFormStackToAvoid") && it.returnType == java.lang.Boolean.TYPE }
+            .forEach { m ->
+                runCatching {
+                    module.hook(m)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .setId("bubbledrawer.freeform.avoid_predicate.${m.name}")
+                        .intercept { chain ->
+                            val ok = chain.proceed() as? Boolean ?: return@intercept false
+                            if (!ok) return@intercept false
+                            val task = chain.args.lastOrNull() ?: return@intercept true
+                            val keep = taskUsableAsAvoidTarget(chain.thisObject, task, avoidingFor.get())
+                            keep
+                        }
+                    lambdas++
+                }.onFailure { module.log(Log.WARN, TAG, "AVOID_PREDICATE_HOOK_FAILED ${m.name}", it) }
+            }
+        module.log(Log.INFO, TAG, "AVOID_FILTER_INSTALLED predicates=$lambdas")
+    }
+
+    /** 谓词里的候选 Task：要求是用户真正看得见、不在退出、不属于正在摆放的那个包。 */
+    private fun taskUsableAsAvoidTarget(service: Any?, task: Any, forPkg: String?): Boolean {
+        if (service == null) return true
+        val rootId = (call(task, "getRootTaskId") as? Int) ?: return true
+        val mffas = runCatching {
+            findMethod(service.javaClass, "getMiuiFreeFormActivityStackForMiuiFB", Int::class.javaPrimitiveType!!)
+                ?.invoke(service, rootId)
+        }.getOrNull() ?: return true
+        val reason = when {
+            call(mffas, "isInFreeFormMode") == false -> "mode"
+            field(mffas, "mIsFrontFreeFormStackInfo") == false -> "notFront"
+            call(mffas, "isExiting") == true -> "exiting"
+            call(mffas, "isReadyExit") == true -> "readyExit"
+            call(mffas, "isHideStackFromFullScreen") == true -> "hidden"
+            runCatching {
+                findMethod(service.javaClass, "isAppBehindHome", Int::class.javaPrimitiveType!!)
+                    ?.invoke(service, rootId) as? Boolean
+            }.getOrNull() == true -> "behindHome"
+            call(task, "isVisibleRequested") == false -> "visibleRequested"
+            call(task, "isVisible") == false -> "invisible"
+            else -> {
+                val stackPkg = call(mffas, "getStackPackageName") as? String
+                if (forPkg != null && stackPkg != null && samePackage(stackPkg, forPkg)) "samePackage" else null
+            }
+        }
+        if (reason != null) {
+            module.log(Log.INFO, TAG, "AVOID_TARGET_SKIPPED root=$rootId reason=$reason for=$forPkg")
+            return false
+        }
+        return true
+    }
+
+    /** 兜底：`MiuiFreeFormStackInfo` 的公开字段版同一套规则。 */
+    private fun stackInfoUsable(info: Any, forPkg: String?): Boolean {
+        if (field(info, "visible") == false) return false
+        if (field(info, "inPinMode") == true) return false
+        if ((field(info, "windowState") as? Int ?: 0) != 0) return false
+        if (field(info, "hadHideStackFormFullScreen") == true) return false
+        val pkg = field(info, "packageName") as? String
+        if (forPkg != null && pkg != null && samePackage(pkg, forPkg)) return false
+        return true
+    }
+
+    private fun samePackage(a: String, b: String): Boolean {
+        if (a == b) return true
+        val svc = loadClass("com.android.server.wm.MiuiFreeFormManagerService") ?: return false
+        val m = findMethod(svc, "isFreeformProxyToRealPackage", String::class.java, String::class.java) ?: return false
+        return runCatching { m.invoke(null, a, b) == true || m.invoke(null, b, a) == true }.getOrDefault(false)
+    }
+
+    private fun describeStackInfo(info: Any): String =
+        "pkg=${field(info, "packageName")} stack=${field(info, "stackId")} visible=${field(info, "visible")} " +
+            "state=${field(info, "windowState")} bounds=${field(info, "bounds")}"
+
+    private fun findMethod(cls: Class<*>, name: String, vararg types: Class<*>): java.lang.reflect.Method? {
+        var c: Class<*>? = cls
+        while (c != null) {
+            runCatching { return c.getDeclaredMethod(name, *types).also { it.isAccessible = true } }
+            c = c.superclass
+        }
+        return null
+    }
+
+    private fun call(target: Any, name: String): Any? =
+        runCatching { findMethod(target.javaClass, name)?.invoke(target) }.getOrNull()
+
+    private fun field(target: Any, name: String): Any? {
+        var c: Class<*>? = target.javaClass
+        while (c != null) {
+            runCatching { return c.getDeclaredField(name).also { it.isAccessible = true }.get(target) }
+            c = c.superclass
+        }
+        return null
     }
 
     /**

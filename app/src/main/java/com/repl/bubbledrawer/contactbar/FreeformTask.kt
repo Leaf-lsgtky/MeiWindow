@@ -56,6 +56,11 @@ object FreeformTask {
         val isMiniPinedState = find(cls, "isMiniPinedState")
         val isNormalState = find(cls, "isNormalState")
         val isInPinMode = find(cls, "isInPinMode")
+        val isEnteringMini = find(cls, "isEnteringMini")
+        val isTmpModeMini = find(cls, "isTmpModeMini")
+        val isHideStackFromFullScreen = find(cls, "isHideStackFromFullScreen")
+        val isInMultiWinFreeFormExit = find(cls, "isInMultiWinFreeFormExit")
+        val isPullDownToFull = find(cls, "isPullDownToFull")
         val enterState = find(cls, "getEnterState")
         val cornerRadius = find(cls, "getCornerRadius")
         val windowingMode = find(cls, "getWindowingMode")
@@ -222,8 +227,55 @@ object FreeformTask {
      */
     fun isDodgeable(info: Any?): Boolean {
         if (info == null) return false
-        if (isExiting(info) || !isVisible(info)) return false
+        if (isExiting(info) || !isVisible(info) || !isVisibleRequested(info)) return false
+        if (isEnteringMini(info) || isTmpModeMini(info) || isHideStackFromFullScreen(info)) return false
+        if (isInMultiWinFreeFormExit(info) || isPullDownToFull(info)) return false
+        if (!isFrontFreeFormStack(info)) return false
         return mode(info) == MODE_NORMAL
+    }
+
+    private fun isEnteringMini(info: Any?): Boolean =
+        read(info) { it.isEnteringMini } as? Boolean ?: false
+
+    private fun isTmpModeMini(info: Any?): Boolean =
+        read(info) { it.isTmpModeMini } as? Boolean ?: false
+
+    private fun isHideStackFromFullScreen(info: Any?): Boolean =
+        read(info) { it.isHideStackFromFullScreen } as? Boolean ?: false
+
+    private fun isInMultiWinFreeFormExit(info: Any?): Boolean =
+        read(info) { it.isInMultiWinFreeFormExit } as? Boolean ?: false
+
+    private fun isPullDownToFull(info: Any?): Boolean =
+        read(info) { it.isPullDownToFull } as? Boolean ?: false
+
+    /**
+     * Whether `RunningTaskInfo.isVisibleRequested` is still true — flips to false as soon as a
+     * close/hide transition starts, whereas `isVisible` stays true until the exit animation ends.
+     */
+    fun isVisibleRequested(info: Any?): Boolean {
+        val taskInfo = read(info) { it.taskInfo } ?: return true
+        return runCatching {
+            taskInfo.javaClass.getField("isVisibleRequested").get(taskInfo) as? Boolean
+        }.getOrNull() ?: true
+    }
+
+    /**
+     * Whether `RunningTaskInfo.miuiFreeFormStackInfo.visible` (`mIsFrontFreeFormStackInfo`) is true —
+     * false when the freeform stack has been pushed behind Home (`mAppBehindHome`).
+     */
+    private fun isFrontFreeFormStack(info: Any?): Boolean {
+        val taskInfo = read(info) { it.taskInfo } ?: return true
+        val stackInfo = runCatching {
+            taskInfo.javaClass.getField("miuiFreeFormStackInfo").get(taskInfo)
+        }.getOrNull() ?: return true
+        val visible = runCatching {
+            stackInfo.javaClass.getField("visible").get(stackInfo) as? Boolean
+        }.getOrNull() ?: true
+        val hiddenFromFullscreen = runCatching {
+            stackInfo.javaClass.getField("hadHideStackFormFullScreen").get(stackInfo) as? Boolean
+        }.getOrNull() ?: false
+        return visible && !hiddenFromFullscreen
     }
 
     fun packageName(info: Any?): String? =

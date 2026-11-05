@@ -34,6 +34,7 @@ import com.repl.bubbledrawer.ui.util.BlurredBar
 import com.repl.bubbledrawer.ui.util.LeadSpacer
 import com.repl.bubbledrawer.ui.util.PageBottomSpacer
 import com.repl.bubbledrawer.ui.util.barColor
+import com.repl.bubbledrawer.ui.util.horizontalCutoutPadding
 import com.repl.bubbledrawer.ui.util.pageBackdrop
 import com.repl.bubbledrawer.ui.util.pageContentPadding
 import com.repl.bubbledrawer.ui.util.pageScroll
@@ -144,11 +145,11 @@ fun GestureBlacklistScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
+                .horizontalCutoutPadding()
                 .pageBackdrop(backdrop)
                 .pageScroll(scrollBehavior),
             contentPadding = pageContentPadding(innerPadding),
         ) {
-            item(key = "lead") { LeadSpacer() }
             item(key = "count") {
                 SmallTitle(
                     text = if (searching) {

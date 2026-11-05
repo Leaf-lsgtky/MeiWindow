@@ -30,7 +30,7 @@
     <string name="pos_both">底部双侧</string>
     <string name="pos_left">仅左角</string>
     <string name="pos_right">仅右角</string>
-    <string name="freeform_toggle">小窗启动</string>
+    <string name="freeform_toggle">角落手势打开的应用以小窗启动</string>
     <string name="freeform_hint">应用以小窗打开；系统不支持自由窗口时回退全屏</string>
     <string name="open_manage">打开固定管理</string>
 
@@ -63,18 +63,19 @@
     <string name="fan_outer_radius_summary">不会小于内圈半径：滑到更小时自动回到内圈半径</string>
     <string name="fan_show_vibrate">滑出时振动</string>
     <string name="fan_show_vibrate_summary">扇形开始展开的那一帧轻振一下（Flyme 手感）</string>
-    <string name="fan_auto_retract">不操作自动收起</string>
+    <string name="fan_auto_retract">自动收起时间</string>
     <string name="fan_auto_retract_release">松手即收</string>
     <string name="gesture_blacklist">手势黑名单</string>
     <string name="gesture_blacklist_empty">未选择应用（角落手势对所有应用生效）</string>
     <string name="gesture_blacklist_count">%1$d 个应用（这些应用里角落手势不响应）</string>
     <string name="gesture_blacklist_count_selected">已选 %1$d 个应用</string>
-    <string name="fan_landscape_two_swipes">横屏时需滑动两次</string>
+    <string name="fan_landscape_two_swipes">横屏手势滑动二次确认</string>
     <string name="fan_landscape_two_swipes_summary">横屏下第一次上滑只提示「再次上滑」，第二次才打开扇形（避免游戏/视频时误触）</string>
     <string name="fan_second_swipe_hint">再次上滑</string>    <string name="sec_value">%1$d 秒</string>
     <string name="fan_auto_retract_summary">滑出后没点选就自动收回；拖到最左（0 秒）则松手立刻收回</string>
     <string name="fan_double_tap_dismiss">双击外部关闭</string>
     <string name="fan_double_tap_dismiss_summary">点扇形外面要连点两下才收起（默认单击即收起）；上下滑翻页不受影响</string>
+    <string name="fan_icon_section_title">图标</string>
     <string name="fan_icon_size">图标大小</string>
     <string name="fan_icon_size_summary">扇形里每个应用图标的大小</string>
     <string name="fan_icon_shape">图标形状</string>
@@ -83,11 +84,11 @@
     <string name="fan_icon_shape_summary">圆形为 Flyme 原样；圆角矩形与桌面图标一致</string>
     <string name="fan_clone_badge">分身角标</string>
     <string name="fan_clone_badge_summary">分身应用的图标一律取主空间那张；开启时在右下角叠一个分身角标，关闭后与主应用完全一致</string>
-    <string name="fan_auto_fill_recommend">自动填满推荐应用</string>
+    <string name="fan_auto_fill_recommend">自动补齐推荐应用</string>
     <string name="fan_auto_fill_recommend_summary">收藏不足一页时用预测的常用应用补齐</string>
     <string name="fan_pressure_page_turn">气压重按翻页</string>
     <string name="fan_pressure_page_turn_summary">在扇形空白处重按切到下一批应用</string>
-    <string name="fan_pressure_sensitivity">重按灵敏度</string>
+    <string name="fan_pressure_sensitivity">预设压力灵敏度</string>
     <string name="fan_pressure_sensitivity_standard">标准 (1.2 hPa)</string>
     <string name="fan_pressure_sensitivity_sensitive">灵敏 (0.8 hPa)</string>
     <string name="fan_pressure_sensitivity_heavy">较重 (1.8 hPa)</string>
@@ -153,50 +154,48 @@
     <string name="search_cancel">取消搜索</string>
 
     <!-- Experimental: Flyme-style Lightweight Freeform -->
-    <string name="exp_flyme_freeform_title">Flyme 样式轻量小窗</string>
+    <string name="exp_flyme_freeform_title">启用 Flyme 样式小窗</string>
     <string name="exp_flyme_freeform_summary">小窗以轻量模式打开：点外部退出、小白条手势转换</string>
     <string name="exp_section_window_tuning">窗口尺寸与位置</string>
-    <string name="exp_center_window">小窗居中显示</string>
+    <string name="exp_center_window">小窗水平居中</string>
     <string name="exp_center_window_summary">横向居中（扇形划出来的那一边仍然优先）</string>
-    <string name="exp_window_vertical">小窗上下位置</string>
+    <string name="exp_window_vertical">小窗垂直位置</string>
     <string name="exp_window_vertical_hint" formatted="false">0 = 正中，负数往上、正数往下（只影响竖屏）</string>
     <string name="exp_no_offset">禁止小窗偏移</string>
     <string name="exp_no_offset_summary">已有小窗时新小窗仍开在同一处（原生小窗也生效）</string>
     <string name="exp_window_scale">小窗缩放比例</string>
     <string name="exp_window_scale_hint" formatted="false">对齐 Flyme 观感，默认 80%（系统原版约 67%）</string>
-    <string name="exp_dim_background">背景暗化遮罩</string>
+    <string name="exp_dim_background">背景压暗</string>
     <string name="exp_dim_background_summary">小窗呼出时压暗背景，突出当前窗口</string>
     <string name="exp_section_gestures">小白条手势交互</string>
-    <string name="exp_outside_dismiss">点击外部关闭小窗</string>
-    <string name="exp_outside_dismiss_action">外部关闭手势</string>
-    <string name="exp_outside_dismiss_action_single">单击</string>
-    <string name="exp_outside_dismiss_action_double">双击</string>
+    <string name="exp_outside_dismiss">点击小窗外部以关闭</string>
+    <string name="exp_outside_dismiss_action">关闭小窗手势</string>
+    <string name="exp_outside_dismiss_action_single">单击外部</string>
+    <string name="exp_outside_dismiss_action_double">双击外部</string>
     <string name="exp_outside_dismiss_summary">点小窗外部任意区域直接退出</string>
-    <string name="exp_swipe_up_mini">小白条上滑转为迷你小窗</string>
+    <string name="exp_swipe_up_mini">快速上滑转为迷你小窗</string>
     <string name="exp_swipe_up_mini_summary">快速上滑挂起为侧边迷你小窗</string>
-    <string name="exp_swipe_up_hold_free">小白条上滑悬停转自由小窗</string>
+    <string name="exp_swipe_up_hold_free">上滑悬停释放小窗</string>
     <string name="exp_swipe_up_hold_free_summary">上滑悬停交还系统原生自由小窗</string>
-    <string name="exp_swipe_down_fullscreen">小白条下滑全屏展开</string>
-    <string name="exp_swipe_down_fullscreen_summary">下滑直接把当前应用全屏</string>
-    <string name="exp_section_mini_window">迷你小窗（悬浮窗）</string>
+    <string name="exp_section_mini_window">迷你小窗</string>
     <string name="exp_flyme_mini_menu">迷你小窗长按菜单</string>
     <string name="exp_flyme_mini_menu_summary">长按侧边迷你小窗呼出 Flyme 悬浮快捷菜单（静音/取消静音与放大还原）</string>
-    <string name="exp_flyme_mini_enlarge">放大倍率</string>
+    <string name="exp_flyme_mini_enlarge">放大尺寸倍率</string>
     <string name="exp_flyme_mini_enlarge_summary">长按菜单里的「放大」把迷你小窗放大到正常大小的这个比例（再点一次还原）</string>
     <string name="exp_section_home">回到桌面</string>
-    <string name="exp_home_keep_freeform">回桌面不收迷你</string>
+    <string name="exp_home_keep_freeform">上滑回桌面时不转为迷你小窗</string>
     <string name="exp_home_keep_freeform_summary">上滑回桌面（含上滑悬停进最近任务）时小窗保持原样，系统不再把它们一起收成迷你小窗；模块自己的「小白条上滑转迷你」不受影响</string>
     <string name="exp_section_info">说明</string>
     <string name="exp_freeform_info">上滑悬停转为自由小窗后模块即取消接管，恢复 HyperOS 原生小窗的全部操作（左右拉伸调大小、顶部三点菜单等）。</string>
 
     <!-- 小窗底部联系人条（Flyme「联系人头像」移植） -->
-    <string name="exp_section_contact_bar">小窗联系人条</string>
-    <string name="exp_contact_bar">显示最近联系人头像</string>
+    <string name="exp_section_contact_bar">联系人头像条</string>
+    <string name="exp_contact_bar">启用联系人头像条</string>
     <string name="exp_contact_bar_summary">小窗下方显示最近聊天的联系人与头像，点击可在小窗内打开会话</string>
-    <string name="exp_contact_bar_min_width">小窗宽度低于此值时隐藏</string>
+    <string name="exp_contact_bar_min_width">联系人头像条隐藏宽度阈值</string>
     <string name="exp_contact_bar_min_width_off">不隐藏</string>
     <string name="exp_contact_bar_note" formatted="false">微信 / QQ 等应用以小窗打开时生效：条宽与小窗一致并随拉伸实时变化，圆角同小窗；迷你小窗或宽度低于阈值时自动隐藏。在头像上上下滑动可移除该联系人。头像与名称取自系统通知（不读取应用数据），因 HyperOS 打开应用会清空其通知，模块会把会话记忆 12 小时。阈值按「小窗宽度 ÷ 屏幕宽度」计算，默认 60%，嫌敏感就往下调，0 = 不按尺寸隐藏。</string>
-    <string name="pinned_functions_title">已选功能</string>
+    <string name="pinned_functions_title">推荐</string>
     <string name="pinned_functions_empty">点击下方功能添加到已选</string>
     <string name="panel_functions_empty">暂未添加功能\n点击右上角加号前往添加</string>
     <string name="functions_catalog_empty">还没有读取到功能\n应用提供的快捷方式会显示在这里</string>
@@ -219,24 +218,24 @@
     <string name="light_open_enable">启用轻量打开</string>
     <string name="light_open_enable_summary">开启后下面各项才会生效（全部默认关闭）</string>
     <string name="light_open_section_notification">通知</string>
-    <string name="light_open_notif_portrait">竖屏点通知以小窗打开</string>
+    <string name="light_open_notif_portrait">竖屏通知以小窗打开</string>
     <string name="light_open_notif_portrait_summary">竖屏时点击通知，该应用在小窗里打开而不是全屏</string>
-    <string name="light_open_notif_landscape">横屏点通知以小窗打开</string>
+    <string name="light_open_notif_landscape">横屏通知以小窗打开</string>
     <string name="light_open_notif_landscape_summary">横屏（看视频、玩游戏）时点击通知，该应用在小窗里打开</string>
     <string name="light_open_section_control_center">控制中心</string>
     <string name="light_open_control_center">长按磁贴以小窗打开</string>
     <string name="light_open_control_center_summary">控制中心里长按带设置页的磁贴，打开的页面落在小窗</string>
     <string name="light_open_section_jump">跳转</string>
-    <string name="light_open_share">分享至应用</string>
+    <string name="light_open_share">分享至应用以小窗打开</string>
     <string name="light_open_share_summary">系统分享（含分享多个）选中的应用以小窗打开</string>
-    <string name="light_open_text">文本操作</string>
+    <string name="light_open_text">文本操作以小窗打开</string>
     <string name="light_open_text_summary">选中文本后编辑条里的条目（打开链接 / 搜索 / 翻译）以小窗打开</string>
-    <string name="light_open_jump">应用间跳转</string>
+    <string name="light_open_jump">应用间小窗跳转</string>
     <string name="light_open_jump_summary">应用之间的跳转按下面的名单决定要不要小窗</string>
-    <string name="light_open_jump_mode">名单模式</string>
-    <string name="light_open_jump_mode_white">白名单（名单内才小窗）</string>
-    <string name="light_open_jump_mode_black">黑名单（名单外全部小窗）</string>
-    <string name="light_open_jump_pick">选择应用</string>
+    <string name="light_open_jump_mode">过滤模式</string>
+    <string name="light_open_jump_mode_white">白名单模式（名单内应用跳转为小窗）</string>
+    <string name="light_open_jump_mode_black">黑名单模式（名单内应用为全屏）</string>
+    <string name="light_open_jump_pick">选择目标应用</string>
     <string name="light_open_jump_pick_count">已选 %1$d 个</string>
     <string name="light_open_jump_pick_empty">还没有选择应用</string>
     <string name="light_open_apps_title">选择应用</string>
@@ -244,4 +243,86 @@
     <string name="light_open_apps_found">找到 %1$d 个</string>
     <string name="light_open_apps_loading">正在读取应用列表…</string>
     <string name="light_open_hint">说明：这些开关只在「你正在用的应用跳到另一个应用」时生效 —— 桌面 / 负一屏 / 最近任务里打开应用、锁屏上的启动、同一个应用内部的跳转都不受影响；不支持小窗的应用会自动保持全屏。通知与控制中心改动即时生效（必要时重启一次系统界面），应用间跳转等三项要重启手机（system_server 没有热重载）。</string>
+
+    <!-- Navigation Tabs -->
+    <string name="tab_home">首页</string>
+    <string name="tab_features">功能</string>
+    <string name="tab_settings">设置</string>
+    <string name="tab_about">关于</string>
+
+    <!-- Feature Categories (HyperMusicCover style) -->
+    <string name="features_trigger_title">触发手势与区域</string>
+    <string name="features_trigger_summary">触发位置 · 范围调节 · 区域预览 · 手势黑名单</string>
+    <string name="features_fan_title">扇形面板调整</string>
+    <string name="features_fan_summary">单/双层 · 图标大小与数量 · 展开半径 · 振动与气压翻页</string>
+    <string name="features_panel_title">更多应用面板</string>
+    <string name="features_panel_summary">面板尺寸 · 图标与文字大小 · 点击外部收起 · 智能推荐</string>
+    <string name="features_manage_title">更多应用列表</string>
+    <string name="features_manage_summary">扇形与面板应用排序 · 增删应用 · 桌面快捷方式 · 推荐功能</string>
+    <string name="features_light_open_title">轻量打开（Beta）</string>
+    <string name="features_light_open_summary">通知、控制中心、系统分享与跳转改用小窗打开</string>
+    <string name="features_freeform_title">Flyme样式小窗调整</string>
+    <string name="features_freeform_summary">居中显示 · 垂直位置 · 缩放比例 · 背景压暗 · 小白条手势</string>
+    <string name="features_freeform_extend_title">小窗扩展功能</string>
+    <string name="features_freeform_extend_summary">联系人头像条 · 迷你小窗长按菜单 · 放大尺寸倍率</string>
+    <string name="features_freeform_other_title">其他</string>
+    <string name="features_freeform_other_summary">禁止小窗偏移 · 回桌面不转迷你小窗</string>
+
+    <!-- Settings Screen -->
+    <string name="settings_interface">界面与个性化</string>
+    <string name="settings_theme">外观与主题</string>
+    <string name="settings_theme_summary">主题模式 · 悬浮底栏 · 毛玻璃效果</string>
+    <string name="theme_mode">主题模式</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="theme_monet_system">动态颜色 (跟随系统)</string>
+    <string name="theme_monet_light">动态颜色 (浅色)</string>
+    <string name="theme_monet_dark">动态颜色 (深色)</string>
+    <string name="floating_navbar">悬浮导航栏</string>
+    <string name="floating_navbar_summary">使用 Miuix 浮动药丸底栏</string>
+    <string name="blur_enabled">背景模糊效果</string>
+    <string name="blur_enabled_summary">顶栏与底栏背景实时渐进模糊</string>
+    <string name="hide_launcher_icon">隐藏桌面图标</string>
+    <string name="hide_launcher_icon_summary">隐藏桌面图标后可通过 LSPosed 管理器进入设置</string>
+    <string name="settings_debug">调试与诊断</string>
+    <string name="settings_diagnostics">模块运行诊断</string>
+    <string name="settings_diagnostics_summary">读取系统界面日志，检测 hook、小窗与手势状态</string>
+    <string name="settings_data">数据与备份</string>
+    <string name="export_settings">导出配置</string>
+    <string name="export_settings_summary">将当前全部设置导出为 JSON 文件</string>
+    <string name="import_settings">导入配置</string>
+    <string name="import_settings_summary">从 JSON 文件恢复设置</string>
+    <string name="export_success">配置导出成功</string>
+    <string name="export_failed">配置导出失败</string>
+    <string name="import_success">配置导入成功</string>
+    <string name="import_failed">配置导入失败</string>
+
+    <!-- About Screen -->
+    <string name="about_title">关于魅窗</string>
+    <string name="about_summary">版本信息 · 开源许可</string>
+    <string name="about_open_source">开源与鸣谢</string>
+    <string name="about_issues">问题反馈</string>
+    <string name="about_issues_summary">提交 Bug、功能建议或使用问题</string>
+    <string name="about_license_gpl">开源协议</string>
+    <string name="about_license_gpl_summary">GPL-3.0 · 查看完整协议文本</string>
+    <string name="about_app_desc">魅族 Flyme 样式气泡抽屉与轻量小窗深度定制模块</string>
+    <string name="about_environment">运行环境</string>
+    <string name="about_device">设备型号</string>
+    <string name="about_android_version">Android 版本</string>
+    <string name="about_hyperos_version">系统版本</string>
+    <string name="about_module_version">模块版本</string>
+    <string name="about_links">项目地址与反馈</string>
+    <string name="about_github">GitHub 开源主页</string>
+    <string name="about_licenses">第三方开源许可</string>
+    <string name="about_licenses_summary">查看本应用使用的开源组件与许可协议</string>
+    <string name="about_credits">致谢与鸣谢</string>
+    <string name="about_credits_summary">感谢为本项目提供灵感与支持的开源项目</string>
+    <string name="quick_overview_title">功能概览</string>
+    <string name="quick_trigger_overview">触发区域</string>
+    <string name="quick_fan_overview">扇形菜单</string>
+    <string name="quick_manage_overview">收藏管理</string>
+    <string name="quick_trigger_desc">%1$s · 底边 %2$d dp · 侧边 %3$d dp</string>
+    <string name="quick_fan_desc">%1$s · %2$d 个应用 · 半径 %3$d dp</string>
+    <string name="quick_manage_desc">点击自定义扇形与更多面板的应用排序与功能</string>
 </resources>

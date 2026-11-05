@@ -23,11 +23,15 @@ android {
                     commandLine("git", "rev-list", "--count", "HEAD")
                 }.standardOutput.asText.get().trim().toInt()
             }.getOrDefault(1)
-        versionName = providers.gradleProperty("versionName").orNull ?: "1.4.4"
+        versionName = providers.gradleProperty("versionName").orNull ?: "1.4.5"
+        // The About page's project link. Kept next to the version because both are "facts about
+        // this build", not runtime state, and neither should be re-typed by hand on a screen.
+        buildConfigField("String", "REPOSITORY_URL", "\"https://github.com/Leaf-lsgtky/MeiWindow\"")
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // Keystore path from the environment. The workflow writes the decoded keystore at the REPO ROOT

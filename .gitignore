@@ -1,6 +1,9 @@
 .gradle/
 .kotlin/
 build/
+# renamed away because a dex file in it went unreadable (Windows FS corruption); delete with
+# `chkdsk /f` on the volume — Gradle cannot recreate/remove it while the entry is damaged.
+app/build_broken/
 local.properties
 *.iml
 .idea/
@@ -15,3 +18,6 @@ work_tables/*.png
 work_tables/*.log
 work_tables/*.txt
 work_tables/*.tgz
+work_assets/
+work_logs/
+work_tools/

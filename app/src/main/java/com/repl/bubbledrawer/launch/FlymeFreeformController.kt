@@ -65,8 +65,8 @@ class FlymeFreeformController(
     /** taskId → window object (richest one we have), in the order we learned about them. */
     private val windows = LinkedHashMap<Int, Any>()
 
-    /** taskId → latch expiry: windows the mask must stay away from (closing, or mid-gesture). */
-    private val suspended = HashMap<Int, Long>()
+    /** taskId → latch expiry: windows the mask (and the avoid pass) must stay away from (closing, or mid-gesture). */
+    private val suspended = ConcurrentHashMap<Int, Long>()
 
     /** The window the mask belongs to right now (null = no mask). */
     private var maskTaskId: Int? = null
@@ -519,8 +519,15 @@ class FlymeFreeformController(
         return null
     }
 
+    fun isWindowSuspended(taskId: Int): Boolean {
+        val exp = suspended[taskId] ?: return false
+        if (exp >= SystemClock.uptimeMillis()) return true
+        suspended.remove(taskId, exp)
+        return false
+    }
+
     private fun isTargetable(taskId: Int, info: Any): Boolean {
-        if (suspended.containsKey(taskId)) return false
+        if (isWindowSuspended(taskId)) return false
         // A window whose surface is already gone must not be anchored to (the ROM may not have told us
         // it vanished yet); the entry itself stays until the tick can prove every window is gone.
         if (!isLive(info)) return false
@@ -543,8 +550,8 @@ class FlymeFreeformController(
     /** Keep the mask away from a window for a while (it is closing, or mid-transition). */
     private fun suspendWindow(taskId: Int?, reason: String) {
         if (taskId == null || taskId <= 0) return
+        suspended[taskId] = SystemClock.uptimeMillis() + SUSPEND_MS
         onMain {
-            suspended[taskId] = SystemClock.uptimeMillis() + SUSPEND_MS
             if (maskTaskId == taskId) maskTaskId = null
             log("DIM_SUSPENDED taskId=$taskId reason=$reason")
             isTakeover = false
@@ -704,16 +711,6 @@ class FlymeFreeformController(
             }
         }
 
-        if (dy > 80f && snap.flymeFreeformSwipeDownFull) {
-            log("ACTION_UP_FULLSCREEN taskId=$activeTaskId dy=$dy")
-            return try {
-                sForceFullscreenTransition = true
-                proceed()
-            } finally {
-                sForceFullscreenTransition = false
-                suspendGesture("GESTURE_FULLSCREEN")
-            }
-        }
 
         return proceed()
     }
@@ -1971,6 +1968,29 @@ class FlymeFreeformController(
         }
 
         /**
+         * Installs the framework-level freeform sizing, centering and avoid-offset hooks inside
+         * `system_server` (`MiuiMultiWindowUtils` / `MiuiFreeformLaunchConfig`).
+         *
+         * Needed because freeform launches resolved inside `system_server` — `LightOpenGate`
+         * (`MiuiFreeformServiceImpl.checkStartActivityByFreeForm`) and chained activity launches
+         * (`MiuiFreeformServiceImpl.addLaunchFreeformActivityOptionIfNeed`) — call
+         * `MiuiMultiWindowUtils.getActivityOptions` in `system_server`, which would otherwise miss
+         * hooks installed only in `com.android.systemui`.
+         */
+        fun installSystemServerHooks(
+            module: XposedModule,
+            prefs: SharedPreferences,
+            classLoader: ClassLoader,
+        ) {
+            if (currentModule == null) currentModule = module
+            hookFreeformLaunchConfig(module, prefs, classLoader)
+            hookFreeformScale(module, prefs, classLoader)
+            hookMiniFreeformScale(module, prefs, classLoader)
+            hookBoundsCentering(module, prefs, classLoader)
+            hookFreeformAvoidOffset(module, prefs, classLoader)
+        }
+
+        /**
          * "Which 小窗 is focused now" — `MultiTaskingTaskRepository.updateFreeformTaskToTop(int,
          * String)` is called for every freeform focus gain (`onTaskInfoChanged` :509-512 when
          * `runningTaskInfo.isFocused`) and from `MiuiFreeformModeController` `moveToFront` (:2800).
@@ -2585,6 +2605,16 @@ class FlymeFreeformController(
             log("FREEFORM_OFFSET_SKIPPED mobile=$mobile other=$fixed")
         }
 
+        /**
+         * Depth counter for `MiuiMultiWindowUtils.getFreeformRect` / `getCustomFreeformRect`
+         * overloads: the 5-arg and 6-arg overloads delegate to the 7-arg overload (and the 6..12-arg
+         * `getFreeformRect` overloads delegate to the 13-arg one), so without a re-entrancy guard
+         * [centerRectOnScreen] and [applyRomAvoidOffset] would run twice on the exact same `Rect`.
+         */
+        private val rectHookDepth = object : ThreadLocal<Int>() {
+            override fun initialValue(): Int = 0
+        }
+
         private fun hookBoundsCentering(
             module: XposedModule,
             prefs: SharedPreferences,
@@ -2604,28 +2634,37 @@ class FlymeFreeformController(
                         .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                         .setId("bubbledrawer.freeform.bounds.${m.name}.${m.parameterCount}")
                         .intercept { chain ->
-                            val result = chain.proceed()
-                            val snap = RemotePrefs.read(prefs)
-                            // 总开关只管"模块要不要接管小窗"；**居中的开关现在只管横向**
-                            // （用户 2026-10-11：「居中仅为横方向居中，竖方向默认居中但可以上下位置调整」），
-                            // 所以这里不再要求 `flymeFreeformCenter` —— 否则关掉居中，上下滑杆也跟着失效。
-                            if (snap.flymeFreeformEnabled && result is Rect && !result.isEmpty) {
-                                // The package this rect is being computed for is a plain String argument in
-                                // every overload (`getCustomFreeformRect(ctx, …, pkg, …)`), and it is what
-                                // tells the avoid pass whether it is looking at the very window it is placing.
-                                //
-                                // 落点被明确指定时（扇形从哪个角落划出来，见 `MiuiFreeform.triggerSideRect`）
-                                // 只补垂直方向：水平那一半是用户划出来的意图，居中不该把它抹掉。
-                                centerRectOnScreen(
-                                    result,
-                                    snap,
-                                    selfPackage = packageOf(chain.args),
-                                    keepLeft = m.name == "getCustomFreeformRect" && requestedLeft(chain.args) != null,
-                                )
-                            } else {
-                                logCenterSkip("${m.name}/${m.parameterCount}", snap)
+                            val depth = (rectHookDepth.get() ?: 0) + 1
+                            rectHookDepth.set(depth)
+                            try {
+                                val result = chain.proceed()
+                                if (depth > 1) return@intercept result
+                                val snap = RemotePrefs.read(prefs)
+                                // 总开关只管"模块要不要接管小窗"；**居中的开关现在只管横向**
+                                // （用户 2026-10-11：「居中仅为横方向居中，竖方向默认居中但可以上下位置调整」），
+                                // 所以这里不再要求 `flymeFreeformCenter` —— 否则关掉居中，上下滑杆也跟着失效。
+                                if (snap.flymeFreeformEnabled && result is Rect && !result.isEmpty) {
+                                    // The package this rect is being computed for is a plain String argument in
+                                    // every overload (`getCustomFreeformRect(ctx, …, pkg, …)`), and it is what
+                                    // tells the avoid pass whether it is looking at the very window it is placing.
+                                    //
+                                    // 落点被明确指定时（扇形从哪个角落划出来，见 `MiuiFreeform.triggerSideRect`）
+                                    // 只补垂直方向：水平那一半是用户划出来的意图，居中不该把它抹掉。
+                                    val callCtx = chain.args.firstOrNull { it is Context } as? Context
+                                    centerRectOnScreen(
+                                        result,
+                                        snap,
+                                        selfPackage = packageOf(chain.args),
+                                        keepLeft = m.name == "getCustomFreeformRect" && requestedLeft(chain.args) != null,
+                                        callContext = callCtx,
+                                    )
+                                } else {
+                                    logCenterSkip("${m.name}/${m.parameterCount}", snap)
+                                }
+                                result
+                            } finally {
+                                rectHookDepth.set(depth - 1)
                             }
-                            result
                         }
                     rectHooks++
                 }.onFailure {
@@ -2885,7 +2924,10 @@ class FlymeFreeformController(
             scaleOverride: Float? = null,
             armRestoreGuard: Boolean = false,
             keepLeft: Boolean = false,
+            callContext: Context? = null,
         ) {
+            // system_server 里没有 SystemUI 的 savedContext：用 ROM 调用方自己传进来的 Context。
+            val ctx = callContext ?: savedContext
             val targetScale = (snap.flymeFreeformScale.coerceIn(50, 95)) / 100f
             // **Which scale will the ROM multiply this rect by?** That is the whole question: the
             // window is positioned by its *unscaled* origin and drawn at `rect * scale`, so a wrong
@@ -2904,7 +2946,7 @@ class FlymeFreeformController(
             // ([scaleOverride] — the `getRestoredBounds` return value *is* the anim target's scale),
             // then the value the module's scale hook last gave the ROM ([appliedScaleFor]).
             val applied = scaleOverride?.takeIf { it.isUsableScale() } ?: appliedScaleFor(selfPackage)
-            val assumed = launchScale(rect, targetScale)
+            val assumed = launchScale(rect, targetScale, ctx)
             if (applied == null && assumed == null && rect.width() >= rect.height()) {
                 // A landscape window's visible size is ~1/aspect *smaller* than the setting, so
                 // centering it with the setting would be wrong in the harmful direction (off both
@@ -2914,7 +2956,7 @@ class FlymeFreeformController(
                 return
             }
             val scale = centerScale(applied, assumed, targetScale)
-            val (screenW, screenH) = screenSizeForCentering()
+            val (screenW, screenH) = screenSizeForCentering(ctx)
             // 用户 2026-10-18：**居中只在竖屏生效**。横屏时一个像素都不改 —— 尤其是迷你小窗点回
             // 普通小窗那一下（[hookBoundsCentering] 里的 `getRestoredBounds`）：ROM 给的 rect 就是
             // 它"原来待的地方"，居中会让它跳到屏幕正中（"从哪里来到哪里去"）。
@@ -2947,7 +2989,7 @@ class FlymeFreeformController(
             // 落点被明确指定时不参与（移开就不是用户划出来的那一边了）；居中关掉时也不参与 ——
             // 那是"模块不要重摆窗口"的意思，滑杆为 0 时这条路径必须与以前完全一样。
             val avoided = if (centered && !snap.flymeFreeformNoOffset && !keepLeft) {
-                applyRomAvoidOffset(rect, visualW, visualH, selfPackage, selfTaskId)
+                applyRomAvoidOffset(rect, visualW, visualH, selfPackage, selfTaskId, ctx)
             } else {
                 false
             }
@@ -3002,11 +3044,11 @@ class FlymeFreeformController(
          * 不等（状态栏/导航栏、显示尺寸覆盖、折叠态…），用哪一个就会整体差半个差值，而且是**两条
          * 居中路径一起差**。既然 ROM 有权威答案，就用它的；拿不到时才退回原来的 metrics。
          */
-        private fun screenSizeForCentering(): Pair<Int, Int> {
+        private fun screenSizeForCentering(context: Context? = savedContext): Pair<Int, Int> {
             val rom = runCatching {
                 Class.forName("android.util.MiuiMultiWindowUtils")
                     .getMethod("getDisplaySize", Context::class.java)
-                    .invoke(null, savedContext) as? Rect
+                    .invoke(null, context ?: savedContext) as? Rect
             }.getOrNull()
             val metrics = android.content.res.Resources.getSystem().displayMetrics
             if (rom != null && rom.width() > 0 && rom.height() > 0) {
@@ -3049,8 +3091,9 @@ class FlymeFreeformController(
             visualH: Float,
             selfPackage: String?,
             selfTaskId: Int,
+            context: Context? = savedContext,
         ): Boolean {
-            val candidate = findOtherWindow(selfTaskId, selfPackage)
+            val candidate = findOtherWindow(selfTaskId, selfPackage, context)
             val other = candidate.bounds
             if (other == null) {
                 val reason = when {
@@ -3063,7 +3106,7 @@ class FlymeFreeformController(
                 )
                 return false
             }
-            val area = freeformAccessibleArea() ?: return false
+            val area = freeformAccessibleArea(context) ?: return false
             val mobile = Rect(rect.left, rect.top, rect.left + visualW.toInt(), rect.top + visualH.toInt())
             val applied = runCatching {
                 Class.forName("android.util.MiuiMultiWindowUtils")
@@ -3101,8 +3144,9 @@ class FlymeFreeformController(
          * identify that way — a mode it could not read, a 迷你/贴边 one, a window that is on its way
          * out, one whose leash is gone — is simply not worth pushing the new window off the centre for.
          */
-        private fun findOtherWindow(selfTaskId: Int, selfPackage: String?): OtherWindow {
-            val repo = instance?.getMultiTaskingTaskRepository()
+        private fun findOtherWindow(selfTaskId: Int, selfPackage: String?, context: Context? = savedContext): OtherWindow {
+            val inst = instance
+            val repo = inst?.getMultiTaskingTaskRepository()
             val ids = repo?.let { repository ->
                 runCatching {
                     (repository.javaClass.getMethod("getFreeformTasksInZOrder").invoke(repository) as? List<*>)
@@ -3116,7 +3160,10 @@ class FlymeFreeformController(
                         selfMatches++
                         continue
                     }
-                    val info = instance?.callWithTaskId(repo, "getMiuiFreeformTaskInfo", id) ?: continue
+                    // 正在关闭（✕ / 上滑关闭 / 窗外点击关闭）的窗口：退出动画期间它在仓库里仍是
+                    // 「可见的普通小窗」，拿它当避让目标就是「一个看不见的小窗把新窗推到右下」。
+                    if (inst?.isWindowSuspended(id) == true) continue
+                    val info = inst?.callWithTaskId(repo, "getMiuiFreeformTaskInfo", id) ?: continue
                     if (selfPackage != null && selfPackage == FreeformTask.packageName(info)) {
                         selfMatches++
                         continue
@@ -3131,7 +3178,14 @@ class FlymeFreeformController(
             }
             // Fallback: no repository answer (a ROM that reshaped the class, or a moment where it is
             // not built yet). Only a live, plain, non-self window counts here either.
-            val tracked = instance?.activeTaskInfo?.takeIf { FreeformTask.isDodgeable(it) }?.also { info ->
+            if (inst == null) {
+                // system_server：没有 WMShell 仓库，问框架自己（getFreeFormStackToAvoid 已被
+                // LightOpenGate 过滤掉退出中/桌面后/同包的栈）。
+                return frameworkOtherWindow(selfPackage, context)
+            }
+            val tracked = inst.activeTaskInfo?.takeIf {
+                FreeformTask.isDodgeable(it) && !inst.isWindowSuspended(FreeformTask.taskId(it))
+            }?.also { info ->
                 if (selfTaskId > 0 && selfTaskId == FreeformTask.taskId(info)) return OtherWindow(null, 1, "tracked")
                 if (selfPackage != null && selfPackage == FreeformTask.packageName(info)) {
                     return OtherWindow(null, 1, "tracked")
@@ -3154,8 +3208,8 @@ class FlymeFreeformController(
          * already carries whatever bounds the ROM chose, including the fixed
          * `ADDITIONAL_FREEFORM_RESOLUTIONS` aspect ratios.
          */
-        private fun launchScale(rect: Rect, targetScale: Float): Float? {
-            val area = freeformAccessibleArea() ?: return null
+        private fun launchScale(rect: Rect, targetScale: Float, context: Context? = savedContext): Float? {
+            val area = freeformAccessibleArea(context) ?: return null
             val reviewed = runCatching {
                 val bounds = Rect(0, 0, rect.width(), rect.height())
                 (Class.forName("android.util.MiuiMultiWindowUtils").getMethod(
@@ -3170,11 +3224,38 @@ class FlymeFreeformController(
         }
 
         /**
+         * The other 小窗 as `system_server` sees it: `MiuiFreeFormManager.getFreeFormStackToAvoid`
+         * (the ROM's own avoid source; [com.repl.bubbledrawer.xposed.LightOpenGate] filters out the
+         * launching package, exiting/behind-home stacks). Visual bounds = bounds × freeFormScale.
+         */
+        private fun frameworkOtherWindow(selfPackage: String?, context: Context?): OtherWindow {
+            val info = runCatching {
+                val displayId = runCatching { context?.display?.displayId }.getOrNull() ?: 0
+                Class.forName("miui.app.MiuiFreeFormManager")
+                    .getMethod("getFreeFormStackToAvoid", Int::class.javaPrimitiveType, String::class.java)
+                    .invoke(null, displayId, selfPackage)
+            }.getOrNull() ?: return OtherWindow(null, 0, "framework")
+            fun f(name: String): Any? = runCatching { info.javaClass.getField(name).get(info) }.getOrNull()
+            val pkg = f("packageName") as? String
+            if (selfPackage != null && pkg == selfPackage) return OtherWindow(null, 1, "framework")
+            if (f("visible") == false || f("inPinMode") == true) return OtherWindow(null, 0, "framework")
+            if ((f("windowState") as? Int ?: 0) != 0) return OtherWindow(null, 0, "framework")
+            val bounds = f("bounds") as? Rect ?: return OtherWindow(null, 0, "framework")
+            if (bounds.isEmpty) return OtherWindow(null, 0, "framework")
+            val scale = (f("freeFormScale") as? Number)?.toFloat() ?: 1f
+            val visual = MiuiFreeform.visualBounds(bounds, scale) ?: Rect(
+                bounds.left, bounds.top,
+                bounds.left + (bounds.width() * scale).toInt(), bounds.top + (bounds.height() * scale).toInt(),
+            )
+            return OtherWindow(visual, 0, "framework")
+        }
+
+        /**
          * `MiuiMultiWindowUtils.getFreeFormAccessibleArea(context, true, isDesktopMode(context))` —
          * the ROM's own "where a 小窗 may live" rect, shared by the scale review and the avoid step.
          */
-        private fun freeformAccessibleArea(): Rect? {
-            val context = savedContext ?: return null
+        private fun freeformAccessibleArea(callContext: Context? = savedContext): Rect? {
+            val context = callContext ?: savedContext ?: return null
             return runCatching {
                 val utils = Class.forName("android.util.MiuiMultiWindowUtils")
                 val desktopMode = runCatching {
@@ -3931,6 +4012,9 @@ fun requestedLeft(args: List<Any?>): Int? {
     val left = args.getOrNull(1) as? Int ?: return null
     val top = args.getOrNull(2) as? Int ?: return null
     if (left == MiuiFreeform.POS_AUTO || top == MiuiFreeform.POS_AUTO) return null
+    // `MiuiFreeformServiceImpl.addLaunchFreeformActivityOptionIfNeed` passes -1/-1 when it has no
+    // source rect — "no position", not a request to pin the window at the left edge.
+    if (left == -1 && top == -1) return null
     return left
 }
 

@@ -260,6 +260,8 @@ class FreeformPlacementTest {
         assertEquals(0, requestedLeft(listOf("context", 0, 107, true, "pkg", true)))
         assertEquals(null, requestedLeft(listOf("context", MiuiFreeform.POS_AUTO, MiuiFreeform.POS_AUTO, true, "pkg", true)))
         assertEquals(null, requestedLeft(listOf("context", 20, MiuiFreeform.POS_AUTO, true, "pkg", true)))
+        // addLaunchFreeformActivityOptionIfNeed's "no source rect" answer is not a request either.
+        assertEquals(null, requestedLeft(listOf("context", -1, -1, true, "pkg", true)))
 
         // Other shapes of the same family (or other methods entirely) must not be read as a request.
         assertEquals(null, requestedLeft(listOf("context")))

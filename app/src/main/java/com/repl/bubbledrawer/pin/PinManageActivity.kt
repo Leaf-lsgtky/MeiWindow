@@ -12,6 +12,7 @@ import com.repl.bubbledrawer.R
 import com.repl.bubbledrawer.data.AppRepository
 import com.repl.bubbledrawer.data.LaunchCountStore
 import com.repl.bubbledrawer.data.PinStore
+import com.repl.bubbledrawer.app.AppSettings
 import com.repl.bubbledrawer.launch.ConfigurableLaunchStrategy
 import com.repl.bubbledrawer.ui.component.MiuixSearchBar
 import com.repl.bubbledrawer.ui.component.SearchCloseButton
@@ -148,8 +149,12 @@ class PinManageActivity : ComponentActivity() {
         }
         shortcutCacheListener = cacheListener
         com.repl.bubbledrawer.shortcut.ShortcutCacheStore.addListener(cacheListener)
+        val appSettings = AppSettings.load(this)
+        val themeMode = runCatching { top.yukonga.miuix.kmp.theme.ColorSchemeMode.valueOf(appSettings.themeMode) }
+            .getOrDefault(top.yukonga.miuix.kmp.theme.ColorSchemeMode.System)
+
         setContent {
-            BubbleDrawerTheme {
+            BubbleDrawerTheme(themeMode = themeMode) {
                 val scrollBehavior = MiuixScrollBehavior()
                 val backdrop = rememberBlurBackdrop()
                 val manageLabel = stringResourceFor(model)

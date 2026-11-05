@@ -31,8 +31,80 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".ui.screen.features.TriggerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.features.GestureBlacklistActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.features.FanDockActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.features.MorePanelActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.features.LightOpenActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.features.LightOpenAppsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.features.FreeformActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.features.FreeformExtendActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.features.FreeformOtherActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.settings.ThemeActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.settings.DiagnosticsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.about.LicenseActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <!-- 关于：设置页里的二级页（与 外观与主题 / 模块运行诊断 同级），不进底栏。 -->
+        <activity
+            android:name=".ui.screen.about.AboutActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
+
+        <activity
+            android:name=".ui.screen.about.CreditsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BubbleDrawer.NoActionBar" />
 
         <activity
             android:name=".pin.PinManageActivity"

@@ -337,7 +337,6 @@ object RemotePrefs {
     const val KEY_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION = "flyme_freeform_outside_dismiss_action"
     const val KEY_FLYME_FREEFORM_SWIPE_UP_MINI = "flyme_freeform_swipe_up_mini"
     const val KEY_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE = "flyme_freeform_swipe_up_hold_free"
-    const val KEY_FLYME_FREEFORM_SWIPE_DOWN_FULL = "flyme_freeform_swipe_down_full"
     const val KEY_FLYME_FREEFORM_DIM_BG = "flyme_freeform_dim_bg"
     const val KEY_FLYME_MINI_MENU = "flyme_mini_menu"
     const val DEFAULT_FLYME_MINI_MENU = true
@@ -425,7 +424,6 @@ object RemotePrefs {
     const val DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION = 0
     const val DEFAULT_FLYME_FREEFORM_SWIPE_UP_MINI = true
     const val DEFAULT_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE = true
-    const val DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL = true
     const val DEFAULT_FLYME_FREEFORM_DIM_BG = true
 
     /**
@@ -550,7 +548,6 @@ object RemotePrefs {
         val flymeFreeformOutsideDismissAction: Int = DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION,
         val flymeFreeformSwipeUpMini: Boolean = DEFAULT_FLYME_FREEFORM_SWIPE_UP_MINI,
         val flymeFreeformSwipeUpHoldFree: Boolean = DEFAULT_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE,
-        val flymeFreeformSwipeDownFull: Boolean = DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL,
         val flymeFreeformDimBg: Boolean = DEFAULT_FLYME_FREEFORM_DIM_BG,
         val flymeMiniMenu: Boolean = DEFAULT_FLYME_MINI_MENU,
         /** 长按菜单「放大」的倍率（百分数），见 [KEY_FLYME_MINI_ENLARGE_PCT] */
@@ -690,7 +687,6 @@ object RemotePrefs {
             flymeFreeformOutsideDismissAction = sp.getInt(KEY_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION, DEFAULT_FLYME_FREEFORM_OUTSIDE_DISMISS_ACTION).coerceIn(0, 1),
             flymeFreeformSwipeUpMini = sp.getBoolean(KEY_FLYME_FREEFORM_SWIPE_UP_MINI, DEFAULT_FLYME_FREEFORM_SWIPE_UP_MINI),
             flymeFreeformSwipeUpHoldFree = sp.getBoolean(KEY_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE, DEFAULT_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE),
-            flymeFreeformSwipeDownFull = sp.getBoolean(KEY_FLYME_FREEFORM_SWIPE_DOWN_FULL, DEFAULT_FLYME_FREEFORM_SWIPE_DOWN_FULL),
             flymeFreeformDimBg = sp.getBoolean(KEY_FLYME_FREEFORM_DIM_BG, DEFAULT_FLYME_FREEFORM_DIM_BG),
             flymeMiniMenu = sp.getBoolean(KEY_FLYME_MINI_MENU, DEFAULT_FLYME_MINI_MENU),
             flymeMiniEnlargePct = sp.getInt(KEY_FLYME_MINI_ENLARGE_PCT, DEFAULT_FLYME_MINI_ENLARGE_PCT)

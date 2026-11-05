@@ -18,19 +18,15 @@ import top.yukonga.miuix.kmp.theme.lightColorScheme
  * AND the SystemUI overlay panel. The panel deliberately goes through the same wrapper
  * because it hosts the SAME page (方案 B): if it were themed separately it would stop
  * looking like the Activity it mirrors.
- *
- * [ColorSchemeMode.MonetSystem] makes miuix read the ROM's `system_accent1_*` palette
- * (MIUI/HyperOS publishes it) and fall back to the static [lightColorScheme] /
- * [darkColorScheme] when absent. Per docs/ui-guidelines.md the only legal color sources
- * are `MiuixTheme.colorScheme.*` and [StatusColors] — no hand-picked colors below.
  */
 @Composable
 fun BubbleDrawerTheme(
+    themeMode: ColorSchemeMode = ColorSchemeMode.System,
     content: @Composable () -> Unit,
 ) {
-    val controller = remember {
+    val controller = remember(themeMode) {
         ThemeController(
-            colorSchemeMode = ColorSchemeMode.System,
+            colorSchemeMode = themeMode,
             lightColors = lightColorScheme(),
             darkColors = darkColorScheme(),
         )
@@ -42,15 +38,18 @@ fun BubbleDrawerTheme(
 }
 
 /**
- * Both Activities go edge-to-edge, so they draw under the bars and the bar icon tint has
- * to follow the scheme miuix actually resolved. 0.9.3 exposes no `MiuixTheme.isDarkTheme`,
- * and with Monet the answer is decided inside the library — so read it off the applied
- * background color. Luminance rather than a named-color compare survives a Monet key
- * color too.
+ * True when the **resolved** Miuix scheme is dark.
  *
- * SideEffect, not LaunchedEffect: this writes a window property, not state. In the
- * overlay panel `LocalView` resolves to a non-Activity context and this is a no-op —
- * the panel owns no window decorations to tint.
+ * Never use `isSystemInDarkTheme()` for a visual decision in this app: the user can force
+ * Light / Dark / Monet-* from 外观与主题, and then the system flag disagrees with what is on
+ * screen — the status card used to go red-on-dark while the page was light.
+ */
+@Composable
+fun isInDarkTheme(): Boolean = MiuixTheme.colorScheme.background.luminance() < 0.5f
+
+/**
+ * Both Activities go edge-to-edge, so they draw under the bars and the bar icon tint has
+ * to follow the scheme miuix actually resolved.
  */
 @Composable
 private fun BarAppearance() {

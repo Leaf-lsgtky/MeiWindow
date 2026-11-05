@@ -394,9 +394,6 @@ object SettingsStore {
     fun setFlymeFreeformSwipeUpHoldFree(context: Context, enabled: Boolean) =
         putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_SWIPE_UP_HOLD_FREE, enabled)
 
-    fun setFlymeFreeformSwipeDownFull(context: Context, enabled: Boolean) =
-        putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_SWIPE_DOWN_FULL, enabled)
-
     fun setFlymeFreeformDimBg(context: Context, enabled: Boolean) =
         putBoolean(context, RemotePrefs.KEY_FLYME_FREEFORM_DIM_BG, enabled)
 

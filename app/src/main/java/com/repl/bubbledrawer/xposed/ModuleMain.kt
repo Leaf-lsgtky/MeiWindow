@@ -140,6 +140,11 @@ class ModuleMain : XposedModule() {
         runCatching {
             LightOpenGate(this, prefs).also { lightOpenGate = it }.install(param.classLoader)
         }.onFailure { log(Log.WARN, TAG, "LIGHT_OPEN_GATE_INSTALL_FAILED", it) }
+        // 小窗尺寸/居中/避让：system_server 里解析出来的小窗启动（轻量打开闸门、跳板 Activity
+        // 链式继承）也在这里调 MiuiMultiWindowUtils，只装在 SystemUI 里会漏掉它们。
+        runCatching {
+            com.repl.bubbledrawer.launch.FlymeFreeformController.installSystemServerHooks(this, prefs, param.classLoader)
+        }.onFailure { log(Log.WARN, TAG, "FREEFORM_SYSTEM_SERVER_HOOKS_FAILED", it) }
         runCatching {
             LauncherMonitorRegion(this, prefs) { pr, msg, t ->
                 if (t != null) log(pr, TAG, msg, t) else log(pr, TAG, msg)
@@ -233,6 +238,10 @@ class ModuleMain : XposedModule() {
                 }
                 LightOpenGate(this, prefs).also { lightOpenGate = it }
                     .install(effectiveLoader)
+                runCatching {
+                    com.repl.bubbledrawer.launch.FlymeFreeformController
+                        .installSystemServerHooks(this, prefs, effectiveLoader)
+                }.onFailure { log(Log.WARN, TAG, "HOT_RELOAD_FREEFORM_SYSTEM_SERVER_HOOKS_FAILED", it) }
                 LauncherMonitorRegion(this, prefs) { pr, msg, t ->
                     if (t != null) log(pr, TAG, msg, t) else log(pr, TAG, msg)
                 }.also { launcherMonitorRegion = it }.install(effectiveLoader)
