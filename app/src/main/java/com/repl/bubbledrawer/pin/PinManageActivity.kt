@@ -124,6 +124,8 @@ class PinManageActivity : ComponentActivity() {
                 listOf(com.repl.bubbledrawer.shortcut.AggregatePayment.entryIn(this@PinManageActivity))
             },
             onFunctionOrderChange = { com.repl.bubbledrawer.shortcut.FunctionPinStore.setPins(this@PinManageActivity, it) },
+            pinnedOrderOf = { com.repl.bubbledrawer.pin.PinnedOrderStore.get(this@PinManageActivity) },
+            onPinnedOrderChange = { com.repl.bubbledrawer.pin.PinnedOrderStore.set(this@PinManageActivity, it) },
         )
         pinManageModel = model
         model.reload()
@@ -134,7 +136,9 @@ class PinManageActivity : ComponentActivity() {
             if (key == com.repl.bubbledrawer.data.PrefsPinBackend.KEY ||
                 key == com.repl.bubbledrawer.data.PrefsPinBackend.KEY_REV ||
                 key == com.repl.bubbledrawer.shortcut.FunctionPinStore.KEY_PINNED_FUNCTIONS ||
-                key == com.repl.bubbledrawer.shortcut.FunctionPinStore.PREFS_KEY_REV
+                key == com.repl.bubbledrawer.shortcut.FunctionPinStore.PREFS_KEY_REV ||
+                key == com.repl.bubbledrawer.pin.PinnedOrderStore.KEY_PINNED_ORDER ||
+                key == com.repl.bubbledrawer.pin.PinnedOrderStore.PREFS_KEY_REV
             ) {
                 runOnUiThread { model.refreshPins() }
             }

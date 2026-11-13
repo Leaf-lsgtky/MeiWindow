@@ -681,6 +681,106 @@ object SettingsStore {
         }
     }
 
+    /**
+     * 「应用 + 功能」混合收藏顺序的后端 —— 与 [functionBackend] 同构，只换了 key。
+     *
+     * 顺序本身也必须跨进程：面板里把「聚合支付」拖到微信前面之后，设置页看到的必须是同一份。
+     * 收藏成员仍由两条原有链分别保存，这里只同步它们的交错顺序。
+     */
+    fun pinnedOrderBackend(context: Context): PinBackend = object : PinBackend {
+        private val local get() = com.repl.bubbledrawer.pin.PinnedOrderStore.backend(fallbackMirror(context))
+
+        override fun read(): String {
+            val localBackend = local
+            val remotePrefs = RemoteBridge.remote ?: return localBackend.read()
+            val remoteBackend = com.repl.bubbledrawer.pin.PinnedOrderStore.backend(remotePrefs)
+
+            val decision = PinsSync.decide(
+                localValue = localBackend.read(),
+                localRev = localBackend.readRev(),
+                remoteValue = remoteBackend.read(),
+                remoteRev = remoteBackend.readRev(),
+            )
+            when (decision.source) {
+                PinsSync.Source.REMOTE -> localBackend.writeWithRev(decision.value, decision.rev)
+                PinsSync.Source.LOCAL -> if (decision.pushBack) {
+                    runCatching { remoteBackend.writeWithRev(decision.value, decision.rev) }
+                }
+                PinsSync.Source.NONE -> Unit
+            }
+            return decision.value
+        }
+
+        override fun write(value: String) {
+            val rev = System.currentTimeMillis()
+            local.writeWithRev(value, rev)
+            val r = RemoteBridge.remote
+            if (r != null) {
+                runCatching {
+                    com.repl.bubbledrawer.pin.PinnedOrderStore.backend(r).writeWithRev(value, rev)
+                }
+            } else {
+                RemoteBridge.start(context)
+            }
+            broadcastPinnedOrder(context, value, rev)
+        }
+
+        override fun readRev(): Long = local.readRev()
+
+        override fun writeRev(rev: Long) {
+            local.writeRev(rev)
+            RemoteBridge.remote?.let { r ->
+                runCatching { com.repl.bubbledrawer.pin.PinnedOrderStore.backend(r).writeRev(rev) }
+            }
+        }
+
+        override fun writeWithRev(value: String, rev: Long) {
+            local.writeWithRev(value, rev)
+            RemoteBridge.remote?.let { r ->
+                runCatching {
+                    com.repl.bubbledrawer.pin.PinnedOrderStore.backend(r).writeWithRev(value, rev)
+                }
+            }
+        }
+    }
+
+    /** 面板可能正开着：把混合收藏顺序直接推给 SystemUI（与 [broadcastFunctions] 同一通道）。 */
+    fun broadcastPinnedOrder(context: Context, value: String, rev: Long) {
+        runCatching {
+            val intent = android.content.Intent(PinSyncReceiver.ACTION_TO_SYSTEMUI)
+                .setPackage(PinSyncReceiver.SYSTEMUI_PACKAGE)
+                .putExtra(PinSyncReceiver.EXTRA_ORDER, value)
+                .putExtra(PinSyncReceiver.EXTRA_ORDER_REV, rev)
+            PinSyncReceiver.sendBroadcastWithIdentity(context, intent)
+        }
+    }
+
+    /**
+     * 面板推过来的混合顺序落盘：保留发送方的戳、比本地旧就丢（规则同
+     * [applyPushedFunctions]）。它不改变成员，只改变显示顺序，所以不需要重新发布详情。
+     */
+    fun applyPushedPinnedOrder(context: Context, value: String, rev: Long): Boolean {
+        val local = com.repl.bubbledrawer.pin.PinnedOrderStore.backend(fallbackMirror(context))
+        val localRev = local.readRev()
+        if (!PinsSync.shouldApplyPush(rev, localRev)) {
+            android.util.Log.i(
+                TAG,
+                "PINNED_ORDER_PUSH_DROPPED rev=$rev localRev=$localRev len=${value.length}",
+            )
+            return false
+        }
+        local.writeWithRev(value, rev)
+        val r = RemoteBridge.remote
+        if (r != null) {
+            runCatching {
+                com.repl.bubbledrawer.pin.PinnedOrderStore.backend(r).writeWithRev(value, rev)
+            }
+        } else {
+            RemoteBridge.start(context)
+        }
+        return true
+    }
+
     /** 面板可能正开着：把功能收藏直接推给 SystemUI（与 [broadcastPins] 同一通道、同一规则）。 */
     fun broadcastFunctions(context: Context, value: String, rev: Long) {
         runCatching {

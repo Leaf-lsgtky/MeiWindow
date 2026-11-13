@@ -50,6 +50,8 @@ import com.repl.bubbledrawer.launch.FullscreenLaunchStrategy
 import com.repl.bubbledrawer.launch.ILaunchStrategy
 import com.repl.bubbledrawer.pin.PanelContentFactory
 import com.repl.bubbledrawer.pin.PinManageModel
+import com.repl.bubbledrawer.pin.PinnedKey
+import com.repl.bubbledrawer.pin.PinnedOrderStore
 import com.repl.bubbledrawer.shortcut.AggregatePayment
 import com.repl.bubbledrawer.shortcut.FunctionPinDetails
 import com.repl.bubbledrawer.shortcut.FunctionPinStore
@@ -189,6 +191,87 @@ class FanHost(
 
     private val functionsLocal get() = FunctionPinStore.backend(sysUiPrefs)
     private val functionsRemote get() = FunctionPinStore.backend(prefs)
+
+    /**
+     * 「应用 + 功能」混排顺序在 SystemUI 侧的镜像。规则与 [functionsOverlay] 完全相同：
+     * 本会话覆盖 >（SystemUI 本地副本 与 远程镜像按戳和解，必要时推回 App）；写 = 覆盖 +
+     * 本地副本 + 交给 App 进程。
+     */
+    @Volatile
+    private var orderOverlay: String? = null
+
+    private val orderLocal get() = PinnedOrderStore.backend(sysUiPrefs)
+    private val orderRemote get() = PinnedOrderStore.backend(prefs)
+
+    private fun readPinnedOrder(): List<PinnedKey> {
+        orderOverlay?.let { return com.repl.bubbledrawer.pin.PinnedOrderCodec.decode(it) }
+        val local = orderLocal
+        val remoteValue = runCatching { orderRemote.read() }.getOrDefault("")
+        val remoteRev = runCatching { orderRemote.readRev() }.getOrDefault(0L)
+        val decision = PinsSync.decide(
+            localValue = local.read(),
+            localRev = local.readRev(),
+            remoteValue = remoteValue,
+            remoteRev = remoteRev,
+        )
+        when (decision.source) {
+            PinsSync.Source.REMOTE -> {
+                local.writeWithRev(decision.value, decision.rev)
+                orderOverlay = null
+            }
+            PinsSync.Source.LOCAL -> if (decision.pushBack) {
+                pushPinnedOrderToApp(decision.value, decision.rev)
+            }
+            PinsSync.Source.NONE -> Unit
+        }
+        return com.repl.bubbledrawer.pin.PinnedOrderCodec.decode(decision.value)
+    }
+
+    private fun writePinnedOrder(order: List<PinnedKey>) {
+        val value = com.repl.bubbledrawer.pin.PinnedOrderCodec.encode(order)
+        val rev = System.currentTimeMillis()
+        orderOverlay = value
+        val local = orderLocal
+        local.writeWithRev(value, rev)
+        pushPinnedOrderToApp(value, rev)
+    }
+
+    private fun pushPinnedOrderToApp(value: String, rev: Long) {
+        scope.launch {
+            val deliveredProvider = runCatching {
+                val extras = android.os.Bundle().apply {
+                    putString(PinSyncReceiver.EXTRA_ORDER, value)
+                    putLong(PinSyncReceiver.EXTRA_ORDER_REV, rev)
+                }
+                host.contentResolver.call(
+                    com.repl.bubbledrawer.shortcut.ShortcutBridge.CONTENT_URI,
+                    PinSyncReceiver.METHOD_SYNC,
+                    null,
+                    extras,
+                )?.getBoolean(com.repl.bubbledrawer.shortcut.ShortcutBridge.EXTRA_APPLIED) == true
+            }.getOrDefault(false)
+
+            val deliveredBroadcast = if (deliveredProvider) {
+                false
+            } else {
+                runCatching {
+                    val intent = Intent(PinSyncReceiver.ACTION)
+                        .setClassName(ModuleResources.MODULE_PACKAGE, "com.repl.bubbledrawer.xposed.PinSyncReceiver")
+                        .putExtra(PinSyncReceiver.EXTRA_ORDER, value)
+                        .putExtra(PinSyncReceiver.EXTRA_ORDER_REV, rev)
+                    PinSyncReceiver.sendBroadcastWithIdentity(host, intent)
+                    true
+                }.getOrDefault(false)
+            }
+
+            logger(
+                if (deliveredProvider || deliveredBroadcast) Log.INFO else Log.WARN,
+                "PINNED_ORDER_WRITE_HANDOFF provider=$deliveredProvider broadcast=$deliveredBroadcast " +
+                    "rev=$rev valueLen=${value.length}",
+                null,
+            )
+        }
+    }
 
     /**
      * 面板读「已选功能」的**详情**（App 进程发布到共享组的那份）。
@@ -394,7 +477,10 @@ class FanHost(
      *  (same dimens/paddings as the layout file, res/values/dimens.xml:10-13). */
     private val itemFactory = GestureAppLauncher.ViewFactory { item, _ -> buildTile(item) }
 
-    private val dock = BubbleDockController(context, repo, pinStore, strategy, itemFactory)
+    private val dock = BubbleDockController(context, repo, pinStore, strategy, itemFactory).also { controller ->
+        // 扇形里也按收藏管理页的混排顺序铺 tile；没有混排布局时 controller 内部会自动退回旧顺序。
+        controller.pinnedOrder = { readPinnedOrder() }
+    }
 
     /** 扇形里要显示的功能条目（见 [com.repl.bubbledrawer.shortcut.FunctionFanItems]）。 */
     private fun fanFunctionEntries(): List<ShortcutItem> {
@@ -571,6 +657,24 @@ class FanHost(
                 )
                 // 面板开着就顺手刷新（回调线程不保证是主线程，而这里是 Compose 状态）。
                 mainHandler.post { if (moreUp) moreContent?.refreshFunctionPins() }
+            } else if (key == PinnedOrderStore.KEY_PINNED_ORDER || key == PinnedOrderStore.PREFS_KEY_REV) {
+                // 混排顺序同款逐 key 回调：远端不旧就采纳，不因为值不同而回推。
+                val remoteRev = runCatching { orderRemote.readRev() }.getOrDefault(0L)
+                val remoteValue = runCatching { orderRemote.read() }.getOrDefault("")
+                val localBackend = orderLocal
+                val localRev = localBackend.readRev()
+                val adopted = PinsSync.shouldAdoptOnKeyEvent(remoteRev, localRev)
+                if (adopted) {
+                    localBackend.writeWithRev(remoteValue, remoteRev)
+                    orderOverlay = null
+                }
+                logger(
+                    Log.INFO,
+                    "PINNED_ORDER_REMOTE_CHANGED remoteRev=$remoteRev localRev=$localRev adopted=$adopted " +
+                        "entries=${com.repl.bubbledrawer.pin.PinnedOrderCodec.decode(localBackend.read()).size}",
+                    null,
+                )
+                mainHandler.post { if (moreUp) moreContent?.refreshPins() }
             } else if (key == RemotePrefs.KEY_FAN_ICON_COUNT || key == RemotePrefs.KEY_FAN_RADIUS_DP ||
                 key == RemotePrefs.KEY_FAN_AUTO_FILL_RECOMMEND || key == RemotePrefs.KEY_FAN_ICON_DP ||
                 key == RemotePrefs.KEY_FAN_ICON_SHAPE || key == RemotePrefs.KEY_FAN_LAYERS ||
@@ -661,6 +765,26 @@ class FanHost(
                         mainHandler.post { if (moreUp) moreContent?.refreshFunctionPins() }
                     } else {
                         logger(Log.WARN, "FUNCTION_SYNC_FROM_APP_STALE rev=$rev localRev=$localRev", null)
+                    }
+                }
+
+                // 应用 + 功能混排顺序：同样的交接规则。
+                val order = intent?.getStringExtra(PinSyncReceiver.EXTRA_ORDER)
+                if (order != null && PinSyncReceiver.isPlausibleOrderValue(order)) {
+                    val rev = intent.getLongExtra(PinSyncReceiver.EXTRA_ORDER_REV, 0L)
+                    val localBackend = orderLocal
+                    val localRev = localBackend.readRev()
+                    if (PinsSync.shouldApplyPush(rev, localRev)) {
+                        localBackend.writeWithRev(order, if (rev > 0L) rev else System.currentTimeMillis())
+                        orderOverlay = null
+                        logger(
+                            Log.INFO,
+                            "PINNED_ORDER_SYNC_FROM_APP_APPLIED len=${order.length} rev=$rev",
+                            null,
+                        )
+                        mainHandler.post { if (moreUp) moreContent?.refreshPins() }
+                    } else {
+                        logger(Log.WARN, "PINNED_ORDER_SYNC_FROM_APP_STALE rev=$rev localRev=$localRev", null)
                     }
                 }
             }
@@ -1607,6 +1731,8 @@ class FanHost(
             // 已选功能的详情（名称/宿主/启动 Intent）：面板据此渲染，不依赖自己那份枚举结果。
             pinnedFunctionItems = { functionDetailsForRender() },
             onFunctionOrderChange = { writeFunctionPins(it) },
+            pinnedOrderOf = { readPinnedOrder() },
+            onPinnedOrderChange = { writePinnedOrder(it) },
         )
         // Panel window root FIRST, then the Compose content inside it: the view-tree
         // owners must be tagged on the window root too (see PanelContentFactory.create

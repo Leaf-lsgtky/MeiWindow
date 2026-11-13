@@ -15,6 +15,7 @@ import com.repl.bubbledrawer.data.LaunchCountStore
 import com.repl.bubbledrawer.data.PinStore
 import com.repl.bubbledrawer.gesture.Corner
 import com.repl.bubbledrawer.launch.ILaunchStrategy
+import com.repl.bubbledrawer.pin.PinnedKey
 
 /**
  * The role Flyme's `AppLauncherWindow` (WindowModeSlidGesture) plays around the
@@ -61,6 +62,12 @@ class BubbleDockController(
      * 在 `buildPages` 里被调用，而那是手势中间的主线程 —— 实现必须是便宜的（不许在这里触发全量扫描）。
      */
     var functionItems: (() -> List<com.repl.bubbledrawer.shortcut.ShortcutItem>)? = null
+
+    /**
+     * 应用与功能的混排顺序（与收藏管理页同一份布局）。为空时保持旧布局：
+     * 收藏应用在前、已选功能在后。
+     */
+    var pinnedOrder: (() -> List<PinnedKey>)? = null
 
     /**
      * 功能 tile 被选中：启动一条快捷方式。
@@ -235,7 +242,7 @@ class BubbleDockController(
     /**
      * Builds pages of candidate apps.
      * Sequences:
-     * 1. Pinned apps, then pinned functions (快捷方式)
+     * 1. Pinned apps + pinned functions (快捷方式)，按同一份混排布局；无布局时应用在前
      * 2. Recommended apps
      *
      * 切页与容量本身在 [FanPagination]（纯函数、有单测）；这里只负责取数。
@@ -265,11 +272,28 @@ class BubbleDockController(
             }
         }
 
-        // 「已选功能」排在收藏应用之后（顺序由用户点选决定，见 FunctionFanItems）。
+        // 「已选功能」与收藏应用共享同一张布局；没有布局时才退回「应用在前、功能在后」。
         val pinnedFunctions = runCatching { functionItems?.invoke() }.getOrNull().orEmpty()
         val pinned = ArrayList<GestureAppLauncher.AdapterItem>(pinnedApps.size + pinnedFunctions.size)
-        pinnedApps.forEach { pinned.add(GestureAppLauncher.AdapterItem.AppItem(it)) }
-        pinnedFunctions.forEach { pinned.add(GestureAppLauncher.AdapterItem.FunctionItem(it)) }
+        val appByKey = pinnedApps.associateBy { PinnedKey.App(it.packageName, it.userId) }
+        val functionByKey = pinnedFunctions.associateBy { PinnedKey.Function(it.pinKey) }
+        val placed = HashSet<PinnedKey>(appByKey.size + functionByKey.size)
+        for (key in runCatching { pinnedOrder?.invoke() }.getOrNull().orEmpty()) {
+            val item = when (key) {
+                is PinnedKey.App -> appByKey[key]?.let { GestureAppLauncher.AdapterItem.AppItem(it) }
+                is PinnedKey.Function -> functionByKey[key]?.let { GestureAppLauncher.AdapterItem.FunctionItem(it) }
+            }
+            if (item != null && placed.add(key)) pinned.add(item)
+        }
+        // 布局丢失/新收藏尚未写进布局时，剩下的项按原有顺序补齐，绝不丢 tile。
+        pinnedApps.forEach { app ->
+            val key = PinnedKey.App(app.packageName, app.userId)
+            if (placed.add(key)) pinned.add(GestureAppLauncher.AdapterItem.AppItem(app))
+        }
+        pinnedFunctions.forEach { function ->
+            val key = PinnedKey.Function(function.pinKey)
+            if (placed.add(key)) pinned.add(GestureAppLauncher.AdapterItem.FunctionItem(function))
+        }
 
         val capacity = FanLayout.tilesPerPage(maxApps, layers)
         // 取数上限 = 「够铺满前几页」的基数（容量 ×3）再按 [FanPagination.topUpRequest] 往上补整页 ——

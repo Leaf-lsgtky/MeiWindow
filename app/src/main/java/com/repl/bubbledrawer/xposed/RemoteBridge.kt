@@ -159,6 +159,18 @@ object RemoteBridge {
             localFnBackend.writeWithRev(fnDecision.value, fnDecision.rev)
         }
 
+        val localOrderBackend = com.repl.bubbledrawer.pin.PinnedOrderStore.backend(localPrefs)
+        val remoteOrderBackend = com.repl.bubbledrawer.pin.PinnedOrderStore.backend(target)
+        val orderDecision = com.repl.bubbledrawer.data.PinsSync.decide(
+            localValue = localOrderBackend.read(),
+            localRev = localOrderBackend.readRev(),
+            remoteValue = remoteOrderBackend.read(),
+            remoteRev = remoteOrderBackend.readRev(),
+        )
+        if (orderDecision.source == com.repl.bubbledrawer.data.PinsSync.Source.REMOTE) {
+            localOrderBackend.writeWithRev(orderDecision.value, orderDecision.rev)
+        }
+
         val localFunctionDetails = localPrefs.getString(com.repl.bubbledrawer.shortcut.FunctionPinDetails.KEY, null)
         val editor = target.edit()
             .putBoolean(RemotePrefs.KEY_ENABLED, snap.enabled)
@@ -239,6 +251,10 @@ object RemoteBridge {
         if (fnDecision.source != com.repl.bubbledrawer.data.PinsSync.Source.NONE) {
             editor.putString(com.repl.bubbledrawer.shortcut.FunctionPinStore.KEY_PINNED_FUNCTIONS, fnDecision.value)
             editor.putLong(com.repl.bubbledrawer.shortcut.FunctionPinStore.PREFS_KEY_REV, fnDecision.rev)
+        }
+        if (orderDecision.source != com.repl.bubbledrawer.data.PinsSync.Source.NONE) {
+            editor.putString(com.repl.bubbledrawer.pin.PinnedOrderStore.KEY_PINNED_ORDER, orderDecision.value)
+            editor.putLong(com.repl.bubbledrawer.pin.PinnedOrderStore.PREFS_KEY_REV, orderDecision.rev)
         }
         if (localFunctionDetails != null) {
             editor.putString(com.repl.bubbledrawer.shortcut.FunctionPinDetails.KEY, localFunctionDetails)

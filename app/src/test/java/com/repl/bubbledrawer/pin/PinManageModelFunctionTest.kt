@@ -85,6 +85,8 @@ class PinManageModelFunctionTest {
         functionPinsOf: () -> List<String> = { emptyList() },
         pinnedFunctionItems: () -> List<ShortcutItem> = { emptyList() },
         onFunctionOrderChange: (List<String>) -> Unit = {},
+        pinnedOrderOf: () -> List<PinnedKey> = { emptyList() },
+        onPinnedOrderChange: (List<PinnedKey>) -> Unit = {},
     ) = PinManageModel(
         loadApps = { persistentListOf() },
         pinsOf = { emptyList() },
@@ -93,6 +95,8 @@ class PinManageModelFunctionTest {
         functionPinsOf = functionPinsOf,
         pinnedFunctionItems = pinnedFunctionItems,
         onFunctionOrderChange = onFunctionOrderChange,
+        pinnedOrderOf = pinnedOrderOf,
+        onPinnedOrderChange = onPinnedOrderChange,
     )
 
     /** 直接往 Compose 状态字段里塞值（与 [PinManageModelPinTest] 同一手法，reload 是异步的）。 */
@@ -258,26 +262,37 @@ class PinManageModelFunctionTest {
     @Test
     fun functionDragReordersAndPersistsOnlyOnDragEnd() {
         var stored = listOf(wechatScan.pinKey, wechatPay.pinKey, alipayScan.pinKey)
+        var storedOrder = emptyList<PinnedKey>()
         val model = model(
             functionPinsOf = { stored },
             onFunctionOrderChange = { stored = it },
+            pinnedOrderOf = { storedOrder },
+            onPinnedOrderChange = { storedOrder = it },
         )
         model.refreshFunctionPins()
 
-        model.moveFunctionPin(wechatScan.pinKey, alipayScan.pinKey)
+        model.movePinnedItem(
+            PinnedKey.Function(wechatScan.pinKey),
+            PinnedKey.Function(alipayScan.pinKey),
+        )
 
         assertEquals(
-            "功能格在功能收藏段内换位，应用段不受影响",
+            "功能格换位后，内存里的混排顺序先变",
             listOf(wechatPay.pinKey, alipayScan.pinKey, wechatScan.pinKey),
-            model.functionPins,
+            model.pinnedOrder.filterIsInstance<PinnedKey.Function>().map { it.pinKey },
         )
         assertEquals(
             "拖动过程中不能每帧写 prefs，顺序要等松手才落盘",
             listOf(wechatScan.pinKey, wechatPay.pinKey, alipayScan.pinKey),
             stored,
         )
+        assertEquals(emptyList<PinnedKey>(), storedOrder)
 
-        model.persistFunctionOrder()
+        model.persistPinnedOrder()
         assertEquals(listOf(wechatPay.pinKey, alipayScan.pinKey, wechatScan.pinKey), stored)
+        assertEquals(
+            listOf(wechatPay.pinKey, alipayScan.pinKey, wechatScan.pinKey),
+            storedOrder.filterIsInstance<PinnedKey.Function>().map { it.pinKey },
+        )
     }
 }

@@ -48,6 +48,9 @@ class PinManageModel(
      */
     private val pinnedFunctionItems: () -> List<com.repl.bubbledrawer.shortcut.ShortcutItem> = { emptyList() },
     private val onFunctionOrderChange: (List<String>) -> Unit = {},
+    /** 应用 + 功能混排顺序；缺失时退回「应用在前、功能在后」的旧布局。 */
+    private val pinnedOrderOf: () -> List<PinnedKey> = { emptyList() },
+    private val onPinnedOrderChange: (List<PinnedKey>) -> Unit = {},
     mainDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Main,
 ) {
     /** 0 = 应用 (Apps), 1 = 功能 (Shortcuts / Features) */
@@ -64,6 +67,15 @@ class PinManageModel(
         private set
 
     /**
+     * 应用 + 功能混在一起时的顺序（只记已经收藏的项）。
+     *
+     * 它不决定成员：取消收藏后残留的键会被忽略，新收藏若没写进布局就补在末尾。
+     * 这样即使顺序那份 prefs 丢了一次，收藏也不会少。
+     */
+    var pinnedOrder: List<PinnedKey> by mutableStateOf(emptyList())
+        private set
+
+    /**
      * 宿主给的已选功能详情（面板从共享组读 App 发布的那份）。
      *
      * 缓存在状态里而不是每次读都问宿主：这是个 getter，组合里会被读很多次，而它背后是一次 prefs
@@ -74,6 +86,7 @@ class PinManageModel(
 
     fun refreshFunctionPins() {
         functionPins = functionPinsOf()
+        pinnedOrder = runCatching { pinnedOrderOf() }.getOrDefault(emptyList())
         pinnedFunctionDetails = runCatching { pinnedFunctionItems() }.getOrDefault(emptyList())
     }
 
@@ -82,12 +95,18 @@ class PinManageModel(
 
     fun toggleFunctionPin(item: com.repl.bubbledrawer.shortcut.ShortcutItem) {
         val key = item.pinKey
-        val next = if (functionPins.contains(key)) functionPins - key else functionPins + key
+        val adding = !functionPins.contains(key)
+        val next = if (adding) functionPins + key else functionPins - key
+        val orderKey = PinnedKey.Function(key)
+        val nextOrder = reconciledPinnedOrder().let { base ->
+            if (adding) (base - orderKey) + orderKey else base - orderKey
+        }
         // 同 [togglePin]：刚写下的这一份就是权威。写入会同步触发 prefs 监听（值 + 戳两个 key 在
         // 同一个文件里），监听者回头再读一次可能拿到撕裂的那一对，于是刚点的这一下被旧值顶掉 ——
         // 用户看到的是「第二次开始点了没反应」。写回之后这里再断言一次，页面与手一致。
         functionPins = next
-        functionOrderDirty = false
+        pinnedOrder = nextOrder
+        writePinnedOrder(nextOrder)
         onFunctionOrderChange(next)
         functionPins = next
     }
@@ -265,6 +284,14 @@ class PinManageModel(
      */
     private var pinnedKeys by mutableStateOf<Set<String>?>(null)
 
+    /**
+     * 最近一次 [applyCells] 拿到的应用收藏（含尚未解析出图标的项）。
+     *
+     * 混排的「成员」不能只看 `cells`：应用列表若还没加载完，一个已收藏应用就没有 `Cell.Pin`，
+     * 用 cells 反推会把它的布局键丢掉。这里保留原始 [PinnedRef] 列表。
+     */
+    private var pinnedAppRefs: List<PinnedRef> = emptyList()
+
     fun isPinned(app: BubbleApp): Boolean =
         (pinnedKeys ?: pinsOf().map { "${it.packageName}#${it.userId}" }.toSet())
             .contains("${app.packageName}#${app.userId}")
@@ -371,70 +398,194 @@ class PinManageModel(
     @MainThread
     fun toggleManageMode() {
         manageMode = !manageMode
-        if (!manageMode) {
-            if (orderDirty) persistOrder()
-            if (functionOrderDirty) persistFunctionOrder()
-        }
+        if (!manageMode && pinnedOrderDirty) persistPinnedOrder()
         rebuild()
     }
 
     fun managerLabel(complete: String, manage: String): String = if (manageMode) complete else manage
 
-    /** 标记是否发生过拖拽换位：只有真拖过才需要在退出管理模式时补写顺序，避免把刚点的收藏覆盖掉。 */
-    private var orderDirty = false
-    private var functionOrderDirty = false
+    /** 标记混排顺序是否发生过拖拽；只有真拖过才需要在退出管理模式时补写一次。 */
+    private var pinnedOrderDirty = false
 
-    /** ★ drag reorder: move the Pin at [from] to [to] (both Pin positions, cells-indexed). */
-    fun movePin(from: Int, to: Int) {
+    /**
+     * ★ 拖拽换位：应用格和功能格共用同一个顺序表。
+     *
+     * 拖动过程中只改内存里的 [pinnedOrder]，不逐帧写 prefs；松手时 [persistPinnedOrder]
+     * 一次性把顺序以及两条成员列表各自的先后落盘。
+     */
+    fun movePinnedItem(from: PinnedKey, to: PinnedKey) {
         if (from == to) return
-        val c = cells
-        if (from !in c.indices || to !in c.indices) return
-        if (c[from] !is Cell.Pin || c[to] !is Cell.Pin) return
-        val mutable = c.toMutableList()
-        mutable.add(to, mutable.removeAt(from))
-        cells = mutable
-        orderDirty = true
-        // Persisting per move would spam the bridge; the drag end calls [persistOrder].
-    }
-
-    fun persistOrder() {
-        orderDirty = false
-        val order = cells.filterIsInstance<Cell.Pin>().map { PinnedRef(it.app.packageName, it.app.userId) }
-        if (order.isNotEmpty()) onOrderChange(order)
+        val order = reconciledPinnedOrder().toMutableList()
+        val fromIndex = order.indexOf(from)
+        val toIndex = order.indexOf(to)
+        if (fromIndex < 0 || toIndex < 0) return
+        order.add(toIndex, order.removeAt(fromIndex))
+        pinnedOrder = order
+        pinnedOrderDirty = true
     }
 
     /**
-     * ★ 已选功能的拖拽排序。
+     * 松手/退出管理模式时落盘。
      *
-     * 应用收藏和功能收藏的持久化是两条链（`PinnedRef` / `functionPins`），不能把它们混成一个
-     * 下标移动：功能格只在功能段内换位，应用段保持原顺序。拖动结束由 [persistFunctionOrder]
-     * 统一落盘，避免每一帧都写远程 prefs。
+     * 1. 用真实的成员集合补齐/裁掉布局键（布局丢过也不会丢收藏）；
+     * 2. 把应用列表和功能列表分别按混排后的**相对顺序**重排，让扇形、搜索等只读单条链的地方
+     *    也保持一致；
+     * 3. 最后写混排布局。
      */
-    fun moveFunctionPin(fromKey: String, toKey: String) {
-        if (fromKey == toKey) return
-        val from = functionPins.indexOf(fromKey)
-        val to = functionPins.indexOf(toKey)
-        if (from < 0 || to < 0) return
-        val mutable = functionPins.toMutableList()
-        mutable.add(to, mutable.removeAt(from))
-        functionPins = mutable
-        functionOrderDirty = true
+    fun persistPinnedOrder() {
+        val order = reconciledPinnedOrder()
+        pinnedOrder = order
+
+        val appRefs = order.filterIsInstance<PinnedKey.App>().map { it.ref }
+        val functionKeys = order.filterIsInstance<PinnedKey.Function>().map { it.pinKey }
+        val appChanged = appRefs != pinnedAppRefs
+        val functionChanged = functionKeys != functionPins
+
+        if (functionChanged) functionPins = functionKeys
+        reorderResolvedPinCells(appRefs)
+        pinnedAppRefs = appRefs
+
+        // 先写布局：后面两条成员列表的写入会同步触发 prefs 监听，监听者重读时布局已经是最新的。
+        writePinnedOrder(order)
+        if (functionChanged) onFunctionOrderChange(functionKeys)
+        if (appChanged) {
+            onOrderChange(appRefs)
+            // 监听回调可能拿到撕裂的旧值；用刚写下的 appRefs 再落一次 cells，保证拖完的
+            // 应用顺序立刻就是最终顺序（与 togglePin 的“写下的这一份就是权威”同一原则）。
+            rebuild(pins = appRefs)
+        }
+
+        // 监听回调可能拿着旧值重建过状态；写完之后再断言一次最终结果。
+        pinnedOrder = order
+        functionPins = functionKeys
+        pinnedAppRefs = appRefs
+        pinnedOrderDirty = false
     }
 
-    fun persistFunctionOrder() {
-        functionOrderDirty = false
-        onFunctionOrderChange(functionPins)
+    /** 收藏区当前真正画出来的混排键（折叠时只含前 [Sections.VISIBLE_MAX] 个应用）。 */
+    fun visiblePinnedKeys(): List<PinnedKey> =
+        pinnedItemsInDisplayOrder(
+            pinnedApps = visibleCells.filterIsInstance<Cell.Pin>(),
+            pinnedFunctions = pinnedFunctions,
+        )
+
+    /**
+     * 把已收藏的应用与功能按混排顺序拼起来。
+     *
+     * 布局里多出来的键（已取消收藏、应用还没加载出来）会被忽略；当前集合里没写进布局的项补在
+     * 末尾，所以任何一侧丢数据都只是顺序退化，不会少格子。
+     */
+    fun pinnedItemsInDisplayOrder(
+        pinnedApps: List<Cell.Pin>,
+        pinnedFunctions: List<com.repl.bubbledrawer.shortcut.ShortcutItem>,
+    ): List<PinnedKey> {
+        val available = LinkedHashSet<PinnedKey>(pinnedApps.size + pinnedFunctions.size)
+        pinnedApps.forEach { available.add(PinnedKey.App(it.app.packageName, it.app.userId)) }
+        pinnedFunctions.forEach { available.add(PinnedKey.Function(it.pinKey)) }
+
+        val result = ArrayList<PinnedKey>(available.size)
+        val seen = HashSet<PinnedKey>(available.size)
+        for (key in reconciledPinnedOrder()) {
+            if (key in available && seen.add(key)) result.add(key)
+        }
+        for (key in available) {
+            if (seen.add(key)) result.add(key)
+        }
+        return result
+    }
+
+    /**
+     * 当前收藏成员（应用 + 功能），按「布局里已有的顺序，再接缺失项」补齐。
+     *
+     * 应用成员看 [pinnedAppRefs]（含未加载出图标的项），功能成员看 [functionPins]。
+     */
+    private fun reconciledPinnedOrder(): List<PinnedKey> {
+        val members = LinkedHashSet<PinnedKey>()
+        val appRefs = if (pinnedAppRefs.isNotEmpty()) pinnedAppRefs else pinsOf()
+        appRefs.forEach { members.add(PinnedKey.App(it.packageName, it.userId)) }
+        functionPins.forEach { members.add(PinnedKey.Function(it)) }
+
+        val result = ArrayList<PinnedKey>(members.size)
+        val seen = HashSet<PinnedKey>(members.size)
+        for (key in pinnedOrder) {
+            if (key in members && seen.add(key)) result.add(key)
+        }
+        for (key in members) {
+            if (seen.add(key)) result.add(key)
+        }
+        return result
+    }
+
+    /** 是否已经存在“功能排在应用前面”的混合顺序（旧布局是应用段之后才是功能段）。 */
+    private fun isMixedOrder(order: List<PinnedKey>): Boolean {
+        var seenFunction = false
+        for (key in order) {
+            when (key) {
+                is PinnedKey.Function -> seenFunction = true
+                is PinnedKey.App -> if (seenFunction) return true
+            }
+        }
+        return false
+    }
+
+    private fun writePinnedOrder(order: List<PinnedKey>) {
+        pinnedOrder = order
+        onPinnedOrderChange(order)
+        // 写 prefs 会同步触发管理页的监听回调；它可能读回旧快照，最后再断言一次。
+        pinnedOrder = order
+    }
+
+    private fun reorderResolvedPinCells(appRefs: List<PinnedRef>) {
+        val current = cells.filterIsInstance<Cell.Pin>()
+        if (current.isEmpty()) return
+        val byKey = current.associateBy { PinnedKey.App(it.app.packageName, it.app.userId) }
+        val ordered = ArrayList<Cell.Pin>(current.size)
+        for (ref in appRefs) {
+            byKey[PinnedKey.App(ref.packageName, ref.userId)]?.let { ordered.add(it) }
+        }
+        val orderedKeys = ordered.mapTo(HashSet()) { PinnedKey.App(it.app.packageName, it.app.userId) }
+        current.forEach { cell ->
+            if (PinnedKey.App(cell.app.packageName, cell.app.userId) !in orderedKeys) ordered.add(cell)
+        }
+        if (ordered.map { PinnedKey.App(it.app.packageName, it.app.userId) } ==
+            current.map { PinnedKey.App(it.app.packageName, it.app.userId) }
+        ) {
+            return
+        }
+        val firstPin = cells.indexOfFirst { it is Cell.Pin }
+        if (firstPin < 0) return
+        val mutable = cells.toMutableList()
+        mutable.removeAll { it is Cell.Pin }
+        mutable.addAll(firstPin, ordered)
+        cells = mutable
     }
 
     fun togglePin(app: BubbleApp) {
         val current = pinsOf().toMutableList()
         val ref = PinnedRef(app.packageName, app.userId)
-        if (!current.remove(ref)) current.add(ref)
-        orderDirty = false
+        val adding = !current.remove(ref)
+        if (adding) current.add(ref)
+        val orderKey = PinnedKey.App(ref.packageName, ref.userId)
+        val nextOrder = reconciledPinnedOrder().let { base ->
+            when {
+                !adding -> base - orderKey
+                // 还是旧布局（应用段在前、功能段在后）时，新应用接在最后一个应用后面，
+                // 不能因为“混排”把刚收藏的应用排到功能后面去。用户真正拖出过交错顺序后
+                // （有功能排在应用前面），新收藏才按“追加到末尾”处理。
+                !isMixedOrder(base) -> {
+                    val insertAt = base.indexOfLast { it is PinnedKey.App } + 1
+                    base.toMutableList().apply { add(insertAt, orderKey) }
+                }
+                else -> (base - orderKey) + orderKey
+            }
+        }
+        pinnedOrder = nextOrder
+        writePinnedOrder(nextOrder)
         onOrderChange(current)
         // 刚写下的这一份就是权威，**不要立刻再和解读一次**：写入值与戳分两个 key，同一毫秒的平票
         // 可能把旧值读回来，表现就是「点了没动，再点别的才刷新」（用户 2026-10-12 报告）。
         rebuild(pins = current)
+        pinnedOrder = nextOrder
     }
 
     /**
@@ -500,6 +651,7 @@ class PinManageModel(
         recommended: List<BubbleApp>,
     ) {
         pinnedKeys = pinned
+        pinnedAppRefs = pins
         cells = Sections.build(
             all = apps,
             pins = pins,

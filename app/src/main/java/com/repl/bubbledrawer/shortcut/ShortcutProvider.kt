@@ -51,6 +51,8 @@ class ShortcutProvider : ContentProvider() {
                 pinsRev = extras?.getLong(com.repl.bubbledrawer.xposed.PinSyncReceiver.EXTRA_REV, 0L) ?: 0L,
                 functions = extras?.getString(com.repl.bubbledrawer.xposed.PinSyncReceiver.EXTRA_FUNCTIONS),
                 functionsRev = extras?.getLong(com.repl.bubbledrawer.xposed.PinSyncReceiver.EXTRA_FUNCTIONS_REV, 0L) ?: 0L,
+                order = extras?.getString(com.repl.bubbledrawer.xposed.PinSyncReceiver.EXTRA_ORDER),
+                orderRev = extras?.getLong(com.repl.bubbledrawer.xposed.PinSyncReceiver.EXTRA_ORDER_REV, 0L) ?: 0L,
                 via = "provider",
             )
             return Bundle().apply { putBoolean(ShortcutBridge.EXTRA_APPLIED, applied) }

@@ -39,6 +39,8 @@ class PinSyncReceiver : BroadcastReceiver() {
             pinsRev = intent.getLongExtra(EXTRA_REV, 0L),
             functions = intent.getStringExtra(EXTRA_FUNCTIONS),
             functionsRev = intent.getLongExtra(EXTRA_FUNCTIONS_REV, 0L),
+            order = intent.getStringExtra(EXTRA_ORDER),
+            orderRev = intent.getLongExtra(EXTRA_ORDER_REV, 0L),
             via = "broadcast",
         )
     }
@@ -75,6 +77,12 @@ class PinSyncReceiver : BroadcastReceiver() {
 
         /** 功能收藏的戳，语义同 [EXTRA_REV]。 */
         const val EXTRA_FUNCTIONS_REV = "functions_rev"
+
+        /** 应用 + 功能混排顺序（只存顺序，不存成员）。 */
+        const val EXTRA_ORDER = "pinned_order"
+
+        /** 混排顺序的戳，语义同 [EXTRA_REV]。 */
+        const val EXTRA_ORDER_REV = "pinned_order_rev"
 
         /**
          * Freshness stamp travelling with [EXTRA_PINS] — see [com.repl.bubbledrawer.data.PinsSync].
@@ -114,6 +122,8 @@ class PinSyncReceiver : BroadcastReceiver() {
             pinsRev: Long,
             functions: String?,
             functionsRev: Long,
+            order: String? = null,
+            orderRev: Long = 0L,
             via: String = "broadcast",
         ): Boolean {
             var applied = false
@@ -169,6 +179,32 @@ class PinSyncReceiver : BroadcastReceiver() {
                     }
                 }
             }
+
+            // 混排顺序（应用 + 功能）也搭同一条交接通道。它只是顺序，丢了最多回到旧排列，
+            // 所以校验比成员列表更严格：认不出的一律整条拒绝，避免把布局写成半截。
+            if (order != null) {
+                if (!isPlausibleOrderValue(order)) {
+                    Log.w(TAG, "PINNED_ORDER_SYNC_REJECTED via=$via bad payload len=${order.length}")
+                } else {
+                    val orderApplied = if (orderRev > 0L) {
+                        SettingsStore.applyPushedPinnedOrder(appContext, order, orderRev)
+                    } else {
+                        SettingsStore.pinnedOrderBackend(appContext).write(order)
+                        true
+                    }
+                    if (orderApplied) {
+                        applied = true
+                        Log.i(
+                            TAG,
+                            "PINNED_ORDER_SYNC_APPLIED via=$via " +
+                                "entries=${com.repl.bubbledrawer.pin.PinnedOrderCodec.decode(order).size} " +
+                                "len=${order.length} rev=$orderRev",
+                        )
+                    } else {
+                        Log.i(TAG, "PINNED_ORDER_STALE_DROPPED via=$via rev=$orderRev len=${order.length}")
+                    }
+                }
+            }
             return applied
         }
 
@@ -188,5 +224,9 @@ class PinSyncReceiver : BroadcastReceiver() {
 
         /** 功能收藏的语法检查见 [FunctionPinStore.isPlausible]（键是 `pkg#id`，id 不受包名规则约束）。 */
         fun isPlausibleFunctionsValue(raw: String): Boolean = FunctionPinStore.isPlausible(raw)
+
+        /** 混合收藏顺序的语法检查见 [com.repl.bubbledrawer.pin.PinnedOrderCodec.isPlausible]。 */
+        fun isPlausibleOrderValue(raw: String): Boolean =
+            com.repl.bubbledrawer.pin.PinnedOrderCodec.isPlausible(raw)
     }
 }
