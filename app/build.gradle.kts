@@ -23,7 +23,7 @@ android {
                     commandLine("git", "rev-list", "--count", "HEAD")
                 }.standardOutput.asText.get().trim().toInt()
             }.getOrDefault(1)
-        versionName = providers.gradleProperty("versionName").orNull ?: "1.4.5"
+        versionName = providers.gradleProperty("versionName").orNull ?: "1.4.6"
         // The About page's project link. Kept next to the version because both are "facts about
         // this build", not runtime state, and neither should be re-typed by hand on a screen.
         buildConfigField("String", "REPOSITORY_URL", "\"https://github.com/Leaf-lsgtky/MeiWindow\"")
