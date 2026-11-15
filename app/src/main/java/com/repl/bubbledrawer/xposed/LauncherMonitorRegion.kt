@@ -5,8 +5,10 @@ import android.content.SharedPreferences
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.os.Handler
-import android.os.IBinder
-import android.os.Looper
+import android.os.Binder
+import android.os.HandlerThread
+import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import android.view.SurfaceControl
@@ -65,7 +67,32 @@ class LauncherMonitorRegion(
     /** 上一次成功应用到某 token 的裁剪签名（`tokenHash|crop`），避免 `displayChanged`（如刷新率切换）刷屏。 */
     private var lastAppliedSignature: String? = null
 
-    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile
+    private var disposed = false
+
+    private var watchdogStarted = false
+
+    private data class InitialCrop(val surface: SurfaceControl, val crop: Rect)
+    private val initialCrop = ThreadLocal<InitialCrop?>()
+
+    // Synchronous SurfaceFlinger transactions and Settings writes must not block system_server's main looper.
+    private val worker = HandlerThread("bubbledrawer-launcher-crop", android.os.Process.THREAD_PRIORITY_BACKGROUND)
+        .apply { start() }
+    private val handler = Handler(worker.looper)
+
+    // Reapply instead of treating a cached signature as proof of SurfaceFlinger's live state.
+    // Also bounds the lifetime of an acknowledgement if hooks disappear during a reload.
+    private val cropWatchdog = object : Runnable {
+        override fun run() {
+            if (disposed) return
+            val interactive = runCatching {
+                systemContext()?.getSystemService(PowerManager::class.java)?.isInteractive != false
+            }.getOrDefault(true)
+            if (interactive) runCatching { applyCrop("watchdog") }
+                .onFailure { logger(Log.WARN, "ARBITER_REFRESH_FAILED", it) }
+            if (!disposed) handler.postDelayed(this, if (interactive) CROP_REFRESH_MS else SCREEN_OFF_REFRESH_MS)
+        }
+    }
 
     /** 必须强引用持有：SharedPreferences 对 listener 只持弱引用。 */
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -87,6 +114,8 @@ class LauncherMonitorRegion(
     }
 
     fun dispose() {
+        disposed = true
+        handler.removeCallbacksAndMessages(null)
         runCatching { prefs.unregisterOnSharedPreferenceChangeListener(prefsListener) }
         val ctx = imsInstance?.let { readField(it, "mContext") as? Context } ?: systemContext()
         // 先把 SurfaceControl 上的裁剪还回去，再写状态。只写状态不还原的话，模块被禁用/热重载后
@@ -97,10 +126,12 @@ class LauncherMonitorRegion(
             runCatching { ctx?.getSystemService(DisplayManager::class.java)?.unregisterDisplayListener(displayListener) }
             displayListenerRegistered = false
         }
+        worker.quitSafely()
     }
 
     fun install(classLoader: ClassLoader) {
         loader = classLoader
+        publishCropState(systemContext(), false)
         runCatching { prefs.registerOnSharedPreferenceChangeListener(prefsListener) }
         val clazz = loadClass(IMS_CLASS)
         if (clazz == null) {
@@ -108,7 +139,66 @@ class LauncherMonitorRegion(
             return
         }
         hookMonitorCreation(clazz)
+        runCatching { hookInitialCrop(clazz) }
+            .onFailure { logger(Log.WARN, "ARBITER_INITIAL_CROP_HOOK_FAILED", it) }
+        hookMonitorRemoval(clazz)
         hookInstanceCapture(clazz)
+    }
+
+    /** Replace the constructor's setCrop(null), in the SAME transaction that first shows it. */
+    private fun hookInitialCrop(imsClass: Class<*>) {
+        val spyClass = loadClass("com.android.server.input.GestureMonitorSpyWindow") ?: return
+        val constructors = spyClass.declaredConstructors.filter { constructor ->
+            constructor.parameterTypes.any { it == String::class.java } &&
+                constructor.parameterTypes.any { it == SurfaceControl::class.java }
+        }
+        if (constructors.isEmpty()) return
+        val cropMethod = SurfaceControl.Transaction::class.java.getMethod(
+            "setCrop", SurfaceControl::class.java, Rect::class.java,
+        )
+        module.hook(cropMethod)
+            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+            .setId("bubbledrawer.system.initial_launcher_crop")
+            .intercept { chain ->
+                val initial = initialCrop.get()
+                if (!disposed && initial != null && chain.args[0] === initial.surface) {
+                    val result = chain.proceed(arrayOf(initial.surface, initial.crop))
+                    logger(Log.INFO, "ARBITER_INITIAL_CROP crop=${initial.crop.toShortString()}", null)
+                    return@intercept result
+                }
+                chain.proceed()
+            }
+        constructors.forEachIndexed { index, constructor ->
+            module.hook(constructor)
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .setId("bubbledrawer.system.launcher_spy_constructor.$index")
+                .intercept { chain ->
+                    val name = chain.args.firstOrNull { it is String } as? String
+                    val displayId = chain.args.firstOrNull { it is Int } as? Int
+                    val surface = chain.args.firstOrNull { it is SurfaceControl } as? SurfaceControl
+                    if (disposed || displayId != Display.DEFAULT_DISPLAY || surface == null ||
+                        name != MONITOR_PREFIX + LAUNCHER_MONITOR_NAME && name != LAUNCHER_MONITOR_NAME) {
+                        return@intercept chain.proceed()
+                    }
+                    val crop = runCatching {
+                        val ctx = imsInstance?.let { readField(it, "mContext") as? Context } ?: systemContext()
+                        computeSwipeUpCrop(displayMetrics(ctx), RemotePrefs.read(prefs))
+                    }.getOrNull() ?: return@intercept chain.proceed()
+                    val previous = initialCrop.get()
+                    initialCrop.set(InitialCrop(surface, crop))
+                    try {
+                        chain.proceed()
+                    } finally {
+                        if (previous == null) initialCrop.remove() else initialCrop.set(previous)
+                    }
+                }
+            // setCrop may already have been inlined into this constructor by the boot image.
+            module.deoptimize(constructor)
+        }
+        // Likewise, prevent the constructor itself from being bypassed by an inlined caller.
+        imsClass.declaredMethods.filter { it.name == "createSpyWindowGestureMonitor" }
+            .forEach { module.deoptimize(it) }
+        logger(Log.INFO, "ARBITER_INITIAL_CROP_HOOKED count=${constructors.size}", null)
     }
 
     /**
@@ -131,13 +221,44 @@ class LauncherMonitorRegion(
                     if (ims != null) onImsCaptured(ims)
                     val result = chain.proceed()
                     val name = chain.args.firstOrNull { it is String } as? String
-                    if (name == LAUNCHER_MONITOR_NAME || name != null && name.startsWith(OUR_MONITOR_PREFIX)) {
-                        scheduleApply("monitorCreated:$name")
+                    if (!disposed && (name == LAUNCHER_MONITOR_NAME || name != null && name.startsWith(OUR_MONITOR_PREFIX))) {
+                        // The ROM creates a FULL-screen spy surface before returning its channel.
+                        // Posting this to the main queue lets the launcher consume corner DOWNs
+                        // in between. Apply here, before it can attach its InputEventReceiver.
+                        val identity = Binder.clearCallingIdentity()
+                        try {
+                            val ok = runCatching { applyCrop("monitorCreated:$name") }
+                                .onFailure { logger(Log.WARN, "ARBITER_CREATE_CROP_FAILED", it) }
+                                .getOrDefault(false)
+                            if (!ok) scheduleApply("monitorCreated:$name")
+                        } finally {
+                            Binder.restoreCallingIdentity(identity)
+                        }
                     }
                     result
                 }
         }
         logger(Log.INFO, "ARBITER_HOOKED ${imsClass.name}.monitorGestureInput count=${methods.size}", null)
+    }
+
+    private fun hookMonitorRemoval(imsClass: Class<*>) {
+        val method = imsClass.declaredMethods.firstOrNull {
+            it.name == "removeSpyWindowGestureMonitor" && it.parameterCount == 1
+        } ?: return
+        method.isAccessible = true
+        module.hook(method)
+            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+            .setId("bubbledrawer.system.launcher_monitor_removed")
+            .intercept { chain ->
+                val ims = chain.thisObject
+                val monitors = ims?.let { readField(it, "mInputMonitors") as? Map<*, *> }
+                val removed = monitors?.let { synchronized(it) { it[chain.args[0]] } }
+                val handle = removed?.let { readField(it, "mWindowHandle") }
+                val isLauncher = handle != null && isLauncherHandle(handle)
+                val result = chain.proceed()
+                if (!disposed && isLauncher) scheduleApply("monitorRemoved")
+                result
+            }
     }
 
     /**
@@ -166,10 +287,18 @@ class LauncherMonitorRegion(
     }
 
     private fun onImsCaptured(ims: Any) {
+        if (disposed) return
         val first = imsInstance == null
         imsInstance = ims
         if (first) {
-            mainHandler.post { ensureDisplayListener(ims) }
+            handler.post {
+                if (disposed) return@post
+                ensureDisplayListener(ims)
+                if (!watchdogStarted) {
+                    watchdogStarted = true
+                    handler.post(cropWatchdog)
+                }
+            }
         }
     }
 
@@ -178,7 +307,7 @@ class LauncherMonitorRegion(
         val ctx = (readField(ims, "mContext") as? Context) ?: systemContext() ?: return
         val dm = ctx.getSystemService(DisplayManager::class.java) ?: return
         runCatching {
-            dm.registerDisplayListener(displayListener, mainHandler)
+            dm.registerDisplayListener(displayListener, handler)
             displayListenerRegistered = true
         }.onFailure {
             logger(Log.WARN, "ARBITER_DISPLAY_LISTENER_FAILED", it)
@@ -186,10 +315,14 @@ class LauncherMonitorRegion(
     }
 
     private fun scheduleApply(reason: String, attempt: Int = 0) {
-        mainHandler.post {
-            val ok = applyCrop(reason)
+        if (disposed) return
+        handler.post {
+            if (disposed) return@post
+            val ok = runCatching { applyCrop(reason) }
+                .onFailure { logger(Log.WARN, "ARBITER_APPLY_FAILED reason=$reason", it) }
+                .getOrDefault(false)
             if (!ok && attempt < RETRY_COUNT) {
-                mainHandler.postDelayed(
+                handler.postDelayed(
                     { scheduleApply(reason, attempt + 1) },
                     RETRY_DELAY_MS,
                 )
@@ -203,57 +336,68 @@ class LauncherMonitorRegion(
      *
      * @param forceClear true = 不管设置如何都恢复全屏裁剪（模块卸载/禁用时用）。
      */
+    @Synchronized
     private fun applyCrop(reason: String, forceClear: Boolean = false): Boolean {
+        if (disposed && !forceClear) return false
         val ims = imsInstance ?: return false
         val monitors = readField(ims, "mInputMonitors") as? Map<*, *> ?: run {
             logger(Log.WARN, "ARBITER_NO_MONITOR_MAP", null)
             return false
         }
         val ctx = (readField(ims, "mContext") as? Context) ?: systemContext()
-        val crop = if (forceClear) null else computeSwipeUpCrop(ctx, RemotePrefs.read(prefs))
-        val wanted = MONITOR_PREFIX + LAUNCHER_MONITOR_NAME
-        var applied = false
+        val geometry = displayMetrics(ctx)
+        val crop = if (forceClear) null else computeSwipeUpCrop(geometry, RemotePrefs.read(prefs))
+        var applied = true
         var found = false
+        val signatures = mutableListOf<String>()
 
-        val entries = synchronized(monitors) { monitors.entries.toList() }
+        val entries = synchronized(monitors) { monitors.entries.map { it.key to it.value } }
         for ((token, monitor) in entries) {
             if (monitor == null) continue
             val handle = readField(monitor, "mWindowHandle") ?: continue
-            val surface = readField(monitor, "mInputSurface") as? SurfaceControl ?: continue
-            val monitorName = runCatching { handle.javaClass.getField("name").get(handle) as? String }
-                .getOrNull()
-            if (monitorName != wanted && monitorName != LAUNCHER_MONITOR_NAME) continue
+            if (!isLauncherHandle(handle)) continue
             found = true
+            val surface = readField(monitor, "mInputSurface") as? SurfaceControl
+            if (surface == null || !surface.isValid) { applied = false; continue }
 
             val cropDesc = crop?.toShortString() ?: "FULL(null)"
             val signature = "${System.identityHashCode(token)}|$cropDesc"
-            if (signature == lastAppliedSignature) {
-                applied = true
-                continue
-            }
+            signatures += signature
 
             // 确保 replaceTouchableRegionWithCrop 为 true（如果之前实验残留了 false，这里顺手修回来）。
             runCatching {
                 handle.javaClass.getField("replaceTouchableRegionWithCrop").setBoolean(handle, true)
             }
             val ok = setSurfaceCrop(surface, handle, crop)
-            if (ok) {
-                lastAppliedSignature = signature
-                applied = true
-            }
-            logger(
+            applied = applied && ok
+            if (!ok || reason != "watchdog" && signature != lastAppliedSignature) logger(
                 if (ok) Log.INFO else Log.WARN,
-                "ARBITER_CROP reason=$reason token=$token name=$monitorName crop=$cropDesc ok=$ok",
+                "ARBITER_CROP reason=$reason token=$token name=swipe-up crop=$cropDesc ok=$ok",
                 null,
             )
         }
         // 状态必须反映「此刻 SurfaceControl 上到底有没有裁剪」：找不到目标监视器时桌面根本没裁，
         // 这里要写回 0 —— 否则 SystemUI 以为「已裁剪」不再在 DOWN 预抢，竞速会静默回来。
-        if (!found) {
+        if (!found && reason != "watchdog") {
             logger(Log.WARN, "ARBITER_NO_MONITOR_TARGET reason=$reason", null)
         }
-        publishCropState(ctx, found && applied && crop != null)
-        return applied
+        lastAppliedSignature = if (found && applied) signatures.joinToString(";") else null
+        val active = found && applied && crop != null && geometry != null
+        val state = if (active) {
+            val boot = runCatching {
+                android.provider.Settings.Global.getInt(ctx!!.contentResolver, android.provider.Settings.Global.BOOT_COUNT, -1)
+            }.getOrDefault(-1)
+            ArbiterCropState(boot, SystemClock.uptimeMillis(), geometry.width, geometry.height,
+                geometry.rotation, crop.left, crop.right)
+        } else null
+        publishCropState(ctx, active, state)
+        return found && applied
+    }
+
+    private fun isLauncherHandle(handle: Any): Boolean {
+        val name = readField(handle, "name") as? String
+        return (name == MONITOR_PREFIX + LAUNCHER_MONITOR_NAME || name == LAUNCHER_MONITOR_NAME) &&
+            readField(handle, "displayId") == Display.DEFAULT_DISPLAY
     }
 
     /**
@@ -261,17 +405,17 @@ class LauncherMonitorRegion(
      * - 返回 `null` 表示不裁剪（恢复全屏默认：`setCrop(sc, null)`）；
      * - 开启左/右角时，从屏幕左边裁掉 `leftCut` px、从右边裁掉 `rightCut` px，高度保持 `[0, height]`。
      */
-    private fun computeSwipeUpCrop(context: Context?, snap: RemotePrefs.Snapshot): Rect? {
+    private fun computeSwipeUpCrop(geometry: DisplayGeometry?, snap: RemotePrefs.Snapshot): Rect? {
         if (!snap.enabled || (!snap.left && !snap.right)) return null
-        val (width, height, density) = displayMetrics(context) ?: return null
+        val (width, height, density) = geometry ?: return null
         if (width <= 0 || height <= 0) return null
         val extentPx = (CornerTriggerRegion.radiusPx(snap.bottomDp, density) + 0.5f).toInt()
-            .coerceIn(0, width / 3)
-        val leftCut = if (snap.left) extentPx else 0
-        val rightCut = if (snap.right) extentPx else 0
-        if (leftCut <= 0 && rightCut <= 0) return null
-        return Rect(leftCut, 0, width - rightCut, height)
+        val (left, right) = launcherCropEdges(width, extentPx, snap.left, snap.right)
+        if (left == 0 && right == width) return null
+        return Rect(left, 0, right, height)
     }
+
+    private data class DisplayGeometry(val width: Int, val height: Int, val density: Float, val rotation: Int)
 
     /**
      * 读取当前默认显示屏的**旋转后**真实宽高与 density。
@@ -282,7 +426,7 @@ class LauncherMonitorRegion(
      * 给的是当前方向下的物理尺寸（横屏 2656×1220），和桌面监视器的输入表面一致。
      */
     @Suppress("DEPRECATION")
-    private fun displayMetrics(context: Context?): Triple<Int, Int, Float>? {
+    private fun displayMetrics(context: Context?): DisplayGeometry? {
         val density = context?.resources?.displayMetrics?.density?.takeIf { it > 0f }
             ?: runCatching { android.content.res.Resources.getSystem().displayMetrics.density }.getOrNull()
             ?: return null
@@ -293,19 +437,16 @@ class LauncherMonitorRegion(
                 if (display != null) {
                     val point = android.graphics.Point()
                     display.getRealSize(point)
-                    if (point.x > 0 && point.y > 0) return Triple(point.x, point.y, density)
+                    if (point.x > 0 && point.y > 0) return DisplayGeometry(point.x, point.y, density, display.rotation)
                 }
             }
         }
-        return runCatching {
-            val dm = android.content.res.Resources.getSystem().displayMetrics
-            Triple(dm.widthPixels, dm.heightPixels, dm.density)
-        }.getOrNull()
+        // A fallback with unknown rotation must never be published as a valid acknowledgement.
+        return null
     }
 
     private fun setSurfaceCrop(surface: SurfaceControl, handle: Any, crop: Rect?): Boolean = runCatching {
         val handleClass = Class.forName("android.view.InputWindowHandle")
-        val transaction = SurfaceControl.Transaction()
         val setInfo = SurfaceControl.Transaction::class.java.getMethod(
             "setInputWindowInfo",
             SurfaceControl::class.java,
@@ -316,9 +457,14 @@ class LauncherMonitorRegion(
             SurfaceControl::class.java,
             Rect::class.java,
         )
-        setInfo.invoke(transaction, surface, handle)
-        setCrop.invoke(transaction, surface, crop)
-        transaction.apply()
+        SurfaceControl.Transaction().use { transaction ->
+            setInfo.invoke(transaction, surface, handle)
+            setCrop.invoke(transaction, surface, crop)
+            // apply() merely queues the transaction. Acknowledge only after its synchronous
+            // form returns; verified in this ROM's framework.jar Transaction.apply(boolean).
+            SurfaceControl.Transaction::class.java.getMethod("apply", Boolean::class.javaPrimitiveType)
+                .invoke(transaction, true)
+        }
         true
     }.getOrElse {
         logger(Log.WARN, "ARBITER_SET_CROP_FAILED", it)
@@ -331,9 +477,14 @@ class LauncherMonitorRegion(
      * 只要裁剪处于生效状态，SystemUI 在角落 `ACTION_DOWN` 时就保持纯观察（`mode=cropped`），
      * 等手指真正滑过触发阈值（`SpyAction.Activate`）才调用一次 `pilferPointers()`。
      */
-    private fun publishCropState(context: Context?, active: Boolean) {
+    private fun publishCropState(context: Context?, active: Boolean, state: ArbiterCropState? = null) {
         val ctx = context ?: systemContext() ?: return
         runCatching {
+            android.provider.Settings.Global.putString(
+                ctx.contentResolver,
+                SETTING_ARBITER_CROP_STATE,
+                if (active) state?.encode().orEmpty() else "",
+            )
             android.provider.Settings.Global.putInt(
                 ctx.contentResolver,
                 SETTING_ARBITER_CROP_ACTIVE,
@@ -380,6 +531,7 @@ class LauncherMonitorRegion(
     companion object {
         /** `Settings.Global` 键名：`1` 表示 `system_server` 已把桌面 `swipe-up` 裁出左右下角。 */
         const val SETTING_ARBITER_CROP_ACTIVE = "bubbledrawer_arbiter_crop_active"
+        const val SETTING_ARBITER_CROP_STATE = "bubbledrawer_arbiter_crop_state"
 
         private const val IMS_CLASS = "com.android.server.input.InputManagerService"
         private const val LAUNCHER_MONITOR_NAME = "swipe-up"
@@ -388,6 +540,8 @@ class LauncherMonitorRegion(
 
         private const val RETRY_COUNT = 6
         private const val RETRY_DELAY_MS = 300L
+        private const val CROP_REFRESH_MS = 2_000L
+        private const val SCREEN_OFF_REFRESH_MS = 10_000L
 
         private val RELEVANT_KEYS = setOf(
             RemotePrefs.KEY_ENABLED,

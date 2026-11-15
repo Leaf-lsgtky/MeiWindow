@@ -191,6 +191,8 @@ class FlymeFreeformController(
         gestureReset()
         cancelMiniFallback()
         runCatching { miniMenuOverlay.dismiss(animate = false) }
+        runCatching { MiniAppAudioHelper.detach(context) }
+        miniTaskInfoMap.clear()
         hideDim()
         windows.clear()
         suspended.clear()
@@ -347,9 +349,7 @@ class FlymeFreeformController(
         val taskInfo = miniTaskInfoMap.remove(taskId) ?: return
         val packageName = callNoArg(taskInfo, "getPackageName") as? String ?: return
         val runningTaskInfo = callNoArg(taskInfo, "getTaskInfo")
-        val uid = runCatching {
-            runningTaskInfo?.javaClass?.getField("effectiveUid")?.getInt(runningTaskInfo)
-        }.getOrNull() ?: -1
+        val uid = resolveMiniAudioUid(context, packageName, runningTaskInfo)
         MiniAppAudioHelper.release(context, packageName, uid)
     }
 
@@ -3627,9 +3627,9 @@ class FlymeFreeformController(
                                                 val runningTaskInfo = runCatching {
                                                     taskInfo.javaClass.getMethod("getTaskInfo").invoke(taskInfo)
                                                 }.getOrNull()
-                                                val uid = runCatching {
-                                                    runningTaskInfo?.javaClass?.getField("effectiveUid")?.getInt(runningTaskInfo)
-                                                }.getOrNull() ?: -1
+                                                val uid = instance?.context?.let {
+                                                    resolveMiniAudioUid(it, pkgName, runningTaskInfo)
+                                                } ?: -1
                                                 val cfg = runCatching {
                                                     runningTaskInfo?.javaClass?.getField("configuration")?.get(runningTaskInfo) as? android.content.res.Configuration
                                                 }.getOrNull()

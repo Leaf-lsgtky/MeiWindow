@@ -99,4 +99,15 @@ class MiniMuteStateTest {
         assertEquals(setOf(other), state.pendingKeys())
         assertTrue(state.observe(other, liveMuted = false))
     }
+
+    @Test
+    fun teardownStillFindsAnAppliedMuteAfterThePendingWatchEnds() {
+        val state = MiniMuteState()
+        state.requestMute(KEY)
+        state.observe(KEY, liveMuted = true)
+        assertTrue(state.pendingKeys().isEmpty())
+        assertEquals(setOf(KEY), state.requestedKeys())
+        state.forget(KEY)
+        assertTrue(state.requestedKeys().isEmpty())
+    }
 }

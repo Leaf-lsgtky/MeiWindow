@@ -68,11 +68,7 @@ class LetterIndexBar @JvmOverloads constructor(
 
     var currentLetter: String?
         get() = bar.currentLetter
-        set(v) {
-            if (bar.currentLetter != v) {
-                bar.currentLetter = v
-            }
-        }
+        set(v) { bar.listLetter = v }
 
     /** Vertical CENTERING of the letter column (panel host passes true). */
     var centerVertically: Boolean
@@ -172,19 +168,24 @@ class LetterIndexBar @JvmOverloads constructor(
         var letters: List<String> = DEFAULT_LETTERS
             set(v) {
                 if (field != v) {
+                    finishTouch()
                     field = v
                     requestLayout()
                     invalidate()
                 }
             }
-        var currentLetter: String? = null
+        var listLetter: String? = null
             set(v) {
                 if (field != v) {
                     field = v
                     invalidate()
                 }
             }
+        val currentLetter: String?
+            get() = selection.index?.let { letters.getOrNull(it) } ?: listLetter
         var onLetterSelected: ((String) -> Unit)? = null
+        private val selection = LetterIndexSelection()
+        private var activePointerId = MotionEvent.INVALID_POINTER_ID
 
         /** Vertical CENTERING (panel bar): draw the column around the view centre. */
         var centerVertically: Boolean = false
@@ -206,17 +207,12 @@ class LetterIndexBar @JvmOverloads constructor(
         }
 
         /** Full-list pitch = textPx + 4dp (C4424c :539-542), shrunk to fit when short. */
-        private fun fullPitch(): Float {
-            val natural = textPx + vSpace
-            val usable = height.toFloat()
-            val total = letters.size * natural
-            return if (usable > 0 && total > usable) usable / letters.size else natural
-        }
+        private fun letterLayout() = LetterIndexLayout(letters.size, height.toFloat(), textPx + vSpace, centerVertically)
 
         /**
          * Row stride actually drawn. `1` = every letter; N>1 = every Nth glyph drawn
-         * (sampled mode), only while [allowSampledDisplay] is on. Touch always divides by
-         * [fullPitch] so dragging over drawn rows still selects hidden letters.
+         * (sampled mode), only while [allowSampledDisplay] is on. Hidden letters keep their
+         * positions in the full column and remain selectable.
          */
         private fun drawStride(): Int {
             if (!allowSampledDisplay) return 1
@@ -231,64 +227,76 @@ class LetterIndexBar @JvmOverloads constructor(
             return stride
         }
 
-        /** Top y of the drawn column (centred when [centerVertically]). */
-        private fun topOffset(p: Float, stride: Int): Float {
-            if (!centerVertically) return 0f
-            val rows = if (stride >= letters.size) letters.size else letters.size / stride + 1
-            val drawn = rows * p
-            return ((height - drawn) / 2f).coerceAtLeast(0f)
-        }
-
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val p = fullPitch()
+            val layout = letterLayout()
+            val p = layout.pitch
             val stride = drawStride()
-            val top = topOffset(p, stride)
+            val top = layout.top
             val cx = barW + padRight - selR          // :384 x = width − padRight − r
             val textX = cx                            // letters share the circle centre line
-            var i = 0
-            while (i < letters.size) {
+            for (i in letters.indices) {
                 val l = letters[i]
                 val cy = top + p * (i + 0.5f)
                 val isCurrent = l == currentLetter
+                if (i % stride != 0 && i != letters.lastIndex && !isCurrent) continue
                 if (isCurrent) {
                     canvas.drawCircle(cx, cy, selR, bgPaint)
                 }
                 val paint = if (isCurrent) currentPaint else normalPaint
                 val fm = paint.fontMetrics
                 canvas.drawText(l, textX, cy - (fm.ascent + fm.descent) / 2f, paint)
-                i += stride
             }
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            val p = fullPitch()
-            val stride = drawStride()
-            val top = topOffset(p, stride)
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                    // Touch maps onto the FULL list regardless of sampling: y → row under
-                    // the finger (anchored to the drawn column), then expand to the real
-                    // letter index (row * stride, clamped).
-                    val row = ((event.y - top) / p).toInt().coerceIn(0, letters.size - 1)
-                    val idx = if (stride <= 1) row else (row * stride).coerceIn(0, letters.size - 1)
-                    val l = letters[idx]
-                    if (l != currentLetter) {
-                        currentLetter = l
-                        showBubble(l, event.y)
-                        onLetterSelected?.invoke(l)
-                        performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-                    } else {
-                        moveBubble(event.y)
-                    }
+                MotionEvent.ACTION_DOWN -> {
+                    val index = selection.begin(event.y, letterLayout()) ?: return false
+                    activePointerId = event.getPointerId(0)
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    selectLetter(index, event.y)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val pointer = event.findPointerIndex(activePointerId)
+                    if (pointer < 0) { finishTouch(); return false }
+                    val y = event.getY(pointer)
+                    val changed = selection.move(y, letterLayout(), 3f * density)
+                    if (changed != null) selectLetter(changed, y) else moveBubble(y)
+                    return true
+                }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    if (event.getPointerId(event.actionIndex) == activePointerId) finishTouch()
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    bubble.visibility = GONE
+                    finishTouch()
                     return true
                 }
             }
-            return false
+            return selection.index != null
+        }
+
+        private fun selectLetter(index: Int, y: Float) {
+            val letter = letters[index]
+            invalidate()
+            showBubble(letter, y)
+            onLetterSelected?.invoke(letter)
+            performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+        }
+
+        private fun finishTouch() {
+            selection.end()
+            activePointerId = MotionEvent.INVALID_POINTER_ID
+            bubble.visibility = GONE
+            parent?.requestDisallowInterceptTouchEvent(false)
+            invalidate()
+        }
+
+        override fun onDetachedFromWindow() {
+            finishTouch()
+            super.onDetachedFromWindow()
         }
     }
 

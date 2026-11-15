@@ -49,6 +49,9 @@ internal class MiniMuteState {
     /** 所有还没生效的静音请求（播放回调要按它补刀）。 */
     fun pendingKeys(): Set<String> = requested.filterNot { it in applied }.toSet()
 
+    /** Includes applied requests so teardown can release every mute owned by this instance. */
+    fun requestedKeys(): Set<String> = requested.toSet()
+
     /** 窗口没了：连意图一起忘掉，否则会在后台继续静音一个没有入口恢复的应用。 */
     fun forget(key: String) {
         requested.remove(key)

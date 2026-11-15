@@ -6,16 +6,16 @@ pipeline 的，以及每一处为什么这么做。**改代码前请先读完"�
 
 ## 0. 一句话模型
 
-> 在 **SystemUI 进程**里建一条 `[Gesture Monitor]` 转发监视器当"眼睛"；底部角落的 DOWN 由我们
-> **当场 pilfer 拿下**（或由 `system_server` 侧让桌面看不见它）；之后用一个纯 Kotlin 状态机判断
-> 这是"面板手势"还是"轻点"，轻点再交还给应用。**系统原生的左右贴边返回、底边上滑回桌面都不改**。
+> 在 **SystemUI 进程**里建一条 `[Gesture Monitor]` 观察触摸；`system_server` 裁掉桌面 `swipe-up`
+> 输入表面的角落列。只有当这次 DOWN 的坐标、方向、启动次数和有效期都与裁剪确认吻合时才纯观察，
+> 达到面板阈值后再 pilfer；缺少确认则在 DOWN 预抢。中间底边仍可回桌面，独立侧边返回窗口不变。
 
 ## 1. 进程与作用域
 
 | 进程 | 作用域 | 干什么 | 代码 |
 |---|---|---|---|
 | `com.android.systemui` | 必须 | 手势监视器、扇子窗口、BACK 提交抑制 | `SystemUiHookInstaller`、`CornerInputMonitor`、`FanHost`、`BackGestureGuard` |
-| `system`（system_server） | 可选 | 只读/实验性的"桌面监视器区域"仲裁（**当前禁用**，见 §3.3） | `LauncherMonitorRegion` |
+| `system`（system_server） | 裁剪仲裁必需 | 裁剪桌面 `swipe-up` 的 SurfaceControl，发布有几何和有效期的确认 | `LauncherMonitorRegion` |
 | `com.miui.home` | 无害但**无效** | 只读探针 `LauncherInputObserver`；A17 上根本不会加载 | 同左 |
 
 `com.miui.home` 为什么进不了：Android 17 的小米桌面由小米自己的
@@ -30,7 +30,7 @@ pipeline 的，以及每一处为什么这么做。**改代码前请先读完"�
 ### 2.1 主通道：gesture monitor（spy 监视器）
 
 `InputManagerGlobal.monitorGestureInput(name, 0)`（三条反射兜底路径见 `createMonitor()`），拿到
-`InputMonitor` + `InputChannel`，用 `InputEventReceiver` 在主线程读事件。它是 **spy**：
+`InputMonitor` + `InputChannel`，用 `InputEventReceiver` 在专用输入线程读事件。它是 **spy**：
 事件同时发给应用和所有监视器，**不消耗触摸**；只有我们显式 `pilferPointers()` 才把整笔手势接管过来。
 
 **监视器名字是有功能的，别乱改**（`MONITOR_NAME = "BubbleDrawer-corner-MultiTaskSwitch"`）：
@@ -61,13 +61,38 @@ if (name != null && (name.endsWith("MultiTaskSwitch") || name.endsWith("pip-resi
 在 DOWN 后约 9 ms 就 `pilferPointers()` 拿下整笔，然后才按手指走向判定。它自己的 Rust 串写着
 `" Home gesture recognized, delay pilfer"`、`formula=down_y-current_y>record_area_height_px`。
 
-### 3.2 我们怎么办：**在它判定之前拿走整笔**
+### 3.2 主路径：在输入分发前裁剪；确认缺失时才预抢
+
+`LauncherMonitorRegion` 保留 `replaceTouchableRegionWithCrop = true`，把 `swipe-up` 表面的 crop
+设为 `[left, 0, right, height]`。角落列之外的中间通道继续接收 HOME；角落 DOWN 不进入该监视器。
+
+2026-11-15 复查发现，旧实现虽然有框架 Hook，仍有这些竞态入口：
+
+1. `GestureMonitorSpyWindow` 构造器在自己的事务里 `setCrop(null)`、`show()`、`apply()`，先发布全屏
+   监视器。旧 Hook 等 `monitorGestureInput` 返回后才 post 裁剪，期间 DOWN 已可能进入输入队列。
+   现在只在目标构造器的线程内，替换该表面的初始 crop；构造器及其调用方做 deopt，避免内联绕过。
+   创建方法返回前还同步重施裁剪，覆盖存活的监视器。
+2. 原 `bubbledrawer_arbiter_crop_active=1` 会持久化，不能证明当前启动、当前方向和坐标已被保护。
+   新 `bubbledrawer_arbiter_crop_state` 记录启动次数、确认 uptime、宽高、rotation、左右边界。
+   SystemUI 检查实际 DOWN 点是否被排除；过期、重启、转屏或尚未覆盖新触发宽度均走预抢兜底。
+3. 原裁剪单侧最多 `width / 3`，触发区却可设置 160dp。例如宽 1080px、density=3、范围 160dp，
+   触发区宽 480px 而裁剪只覆盖 360px，剩下 120px 仍交给桌面。现在按完整触发宽度裁剪，边界留
+   1px，并保留非空的中间通道；极端尺寸无法覆盖的点不会被确认成 `cropped`。
+
+确认只在成功提交裁剪后发布。独立工作线程亮屏每 2 秒重施并续期（有效期 6 秒），熄屏停止续期，
+低频检查亮屏恢复；输入线程不执行 Settings IPC。监视器移除、配置变化、转屏会重新检查；dispose
+取消旧任务并恢复默认 crop，避免热重载后旧回调再把区域改回去。
+
+当前连接设备修前也有正常的 `mode=cropped → MON_ACTIVATE`，说明不是每笔都失败。日志中另有
+起点在配置扇区之外的 `MON_DOWN_REJECTED`，这类正常交给系统的上滑要与裁剪竞态区分。
+
+#### 3.2.1 兜底预抢的时序
 
 `CornerInputMonitor.beginMonitorStroke()` 里，DOWN 落在"冲突带"时当场 `pilferPointers()`：桌面那边有
 协作逻辑——`on_pilfered_at_down: passthrough_eligible = true`、`"skip DOWN pilfer"`，**别人在 DOWN
-抢走了，它就不抢了**。这是唯一确定的做法。
+抢走了，它就不抢了**。这条兜底仍是跨进程抢流，不能与已生效的输入表面裁剪等同。
 
-#### 3.2.1 这是一场 ~2ms 的竞赛（2026-10-11 实测）
+以下为 2026-10-11 的历史预抢取证：
 
 真机 logcat 里能量出这场竞赛的全部过程（同一笔手势）：
 
@@ -92,7 +117,7 @@ if (name != null && (name.endsWith("MultiTaskSwitch") || name.endsWith("pip-resi
    （`THREAD_PRIORITY_URGENT_DISPLAY`），只有"要动窗口"的动作才 `post` 回主线程。
 3. **抢之前先做 binder 调用**：`PowerManager.isInteractive` / `KeyguardManager.isKeyguardLocked`、
    `WindowManager` 指标读取都曾在抢占之前。现在几何（`refreshGeometry`，主线程）、电源/锁屏
-   （`refreshState`，输入线程上看门狗 + 亮灭屏/锁屏事件）全是缓存字段，DOWN 路径只剩
+   （`refreshState`，独立状态线程看门狗 + 亮灭屏/锁屏事件）全是缓存字段，DOWN 路径只剩
    **读字段 + 一次 `pilferPointers()`**。启动时 `MON_WARMUP` 还会把这条路径跑 24 遍（类加载/JIT）。
 
 看门狗是这套东西里唯一"不靠手指触发"的开销，所以它跟着屏幕走：亮屏 250ms（远小于人从锁屏摸到角落的
@@ -123,7 +148,7 @@ owned=true` 则是"抢下来又被夺回"的签名。
   在角落根本收不到 DOWN"）：**已验证会打断桌面的底边上滑**——即使区域只是"全屏挖掉两个小角"，
   打上之后从屏幕正中间上滑也不再回桌面（`dumpsys input` 里该监视器的 inputConfig 仍打印
   `SPY`，说明 MIUI 的 dispatcher 并不按 AOSP 那样接受显式 `touchableRegion`，很可能只认 surface crop）。
-  因此 `LauncherMonitorRegion.ENABLED = false`，代码保留为"此路不通"的记录。
+  因此不能恢复这种显式 region 方案；当前启用的是上文的 **SurfaceControl crop**，两者不同。
   另外 LSPosed 的 remote preferences 在 hooked 进程里是**只读**的（`edit()` 抛
   `UnsupportedOperationException: Read only implementation`），system_server 也无法用它回报状态。
 
@@ -143,8 +168,7 @@ owned=true` 则是"抢下来又被夺回"的签名。
    加 receiver（会 `signal 11`，:615-641）、不能覆盖正在映射的 `.so`（:1047-1051）、会 ANR
    （:1174-1181）等。
 
-结论：**在 Java 层能做的协同我们已经做到**（DO_NOT_PILFER + DOWN 抢流）；再往前只能整包移植原生
-payload + 定制 LSPosed，收益（角落少一次 pilfer）远小于风险。
+当前使用 Java 层 SurfaceControl crop + DO_NOT_PILFER + 预抢兜底，不需要移植 launcher 原生 payload。
 
 ## 4. 角落手势语义
 
@@ -180,8 +204,8 @@ SYSTEMUI_CORNER_REINSTALLED_AFTER_HOT_RELOAD
 MON_INPUT_READY name=BubbleDrawer-corner-MultiTaskSwitch …
 ```
 
-`system_server` 那一侧要等它下一次重启才会换成新代码（它没有热重载入口），但那里的 arbiter 是禁用
-状态，所以无关紧要。
+`system_server` 同样在 `onHotReloaded` 重建 `LauncherMonitorRegion`。两个进程的重载先后并无保证，
+所以新裁剪确认就绪前必须走预抢，不能沿用旧的持久化布尔值。
 
 ## 6. 调试手册
 
@@ -191,14 +215,15 @@ MON_INPUT_READY name=BubbleDrawer-corner-MultiTaskSwitch …
 |---|---|
 | `MON_INPUT_READY` | 手势监听建好（`thread=bubbledrawer-corner-input` = 事件不在主线程处理） |
 | `MON_WARMUP` | 启动时预热 DOWN 路径（几何缓存就绪的证据） |
-| `MON_DOWN` / `MON_DOWN_REJECTED` | DOWN 是否落在触发区（`box=`、`band=`、`mode=pre-own\|observe`、`lat=` 触摸到抢占用时 ms） |
+| `MON_DOWN` / `MON_DOWN_REJECTED` | DOWN 是否落在触发区（`box=`、`band=`、`mode=cropped\|pre-own\|observe`、`cropAge=` 确认年龄、`lat=` 触摸到处理用时 ms） |
 | `MON_ACTIVATE` | 已认领并展开扇子 |
 | `MON_PILFER_OK` / `MON_PILFER_FAILED` / `MON_PILFER_RETRY` | pilfer 结果（`_RETRY` = 这一笔在 DOWN 已经抢过，Activate 时又抢了一次；没有 `_RETRY` 说明 DOWN 那次没抢） |
 | `MON_SWALLOWED` | 被我们吃掉但既不是扇子也不是轻点（真拖动） |
 | `MON_TAP_PASSTHROUGH_DELEGATED` / `_INJECTED` | 轻点交还：桌面补了 / 我们补了 |
 | `MON_SYSTEM_CANCEL` | 外力取消；**带 `owned=true` 就是"抢下的笔被系统夺回"**（扇面+回桌面同时发生的签名） |
 | `MON_IME_PROBE_MISSING` | 键盘高度探针窗口没建起来（降级：键盘上的角落按下也会被抢下） |
-| `ARBITER_*` | system_server 侧（当前禁用） |
+| `ARBITER_INITIAL_CROP_HOOKED` / `ARBITER_CROP` | 初次发布 Hook 已安装 / system_server 裁剪结果 |
+| `ARBITER_*_FAILED` / `ARBITER_NO_MONITOR_TARGET` | 裁剪不可确认，需查失败原因与 SystemUI 的预抢兜底 |
 | `HOT_RELOAD*` / `MON_DISPOSED_FOR_HOT_RELOAD` | 热重载生命周期 |
 
 常用命令（真机）：
@@ -229,6 +254,6 @@ adb shell su -c "sh /data/local/tmp/sg2.sh 1150 2620 1020 2440 12 60"
 
 ## 8. 已知限制
 
-- 底部 28dp 冲突带内的**真拖动**（既不是扇子也不是轻点）会被吃掉，日志 `MON_SWALLOWED`。
+- 预抢兜底路径内的**真拖动**（既不是扇子也不是轻点）会被吃掉，日志 `MON_SWALLOWED`。
 - 角落扇区内不再触发系统 HOME（这是刻意的：该区域归面板）。
 - `LauncherInputObserver`（桌面进程探针）在 A17 上不会加载，保留仅为记录。

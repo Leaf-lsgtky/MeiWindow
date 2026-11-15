@@ -51,7 +51,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -78,6 +77,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -100,6 +100,8 @@ import com.repl.bubbledrawer.ui.util.horizontalCutoutPadding
 import com.repl.bubbledrawer.ui.util.pageBackdrop
 import com.repl.bubbledrawer.ui.util.pageScroll
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -170,7 +172,12 @@ fun PinManageScreen(
     }
 
     val coroutineScope = rememberCoroutineScope()
+    var letterScrollJob by remember { mutableStateOf<Job?>(null) }
     val pagerState = rememberPagerState(initialPage = model.selectedTab) { 2 }
+
+    LaunchedEffect(model.isSearching, model.selectedTab) {
+        letterScrollJob?.cancel()
+    }
 
     // 页面与 Tab 状态同步：Pager 滑动或动画结束后更新 model.selectedTab
     LaunchedEffect(pagerState.currentPage) {
@@ -237,6 +244,7 @@ fun PinManageScreen(
             private var lastBlockedLogAt = 0L
 
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput) letterScrollJob?.cancel()
                 val delta = available.y
                 val minOffset = -sharedPinsContentHeightPx
                 return if (delta < 0 && headerOffsetPx > minOffset && minOffset < 0f) {
@@ -282,11 +290,29 @@ fun PinManageScreen(
     }
 
     val tabRowHeightDp = 52.dp
-    val tabRowHeightPx = with(density) { tabRowHeightDp.toPx() }
     val tabRowY = (topContentPaddingPx + sharedPinsContentHeightPx + headerOffsetPx)
         .coerceAtLeast(topContentPaddingPx)
     val pinsY = topContentPaddingPx + headerOffsetPx
     val pagerY = (sharedPinsContentHeightPx + headerOffsetPx).coerceAtLeast(0f)
+
+    // One animation owns both the header and grid. Scrubbing to another letter cancels
+    // the old destination immediately instead of queuing several header animations.
+    val scrollToSection: (LazyGridState, Int, Boolean) -> Unit = { grid, index, showPins ->
+        letterScrollJob?.cancel()
+        letterScrollJob = coroutineScope.launch {
+            coroutineScope {
+                launch {
+                    val target = if (showPins) 0f else -sharedPinsContentHeightPx
+                    Animatable(headerOffsetPx).animateTo(target, tween(220)) {
+                        headerOffsetPx = value.coerceIn(-sharedPinsContentHeightPx, 0f)
+                    }
+                }
+                // LazyGrid already positions offset=0 below its contentPadding (the two bars).
+                // A negative bar-height offset here would add that space a second time.
+                launch { grid.animateScrollToItem(index) }
+            }
+        }
+    }
 
     // 收藏区是**盖在 Pager 上面**的一层（视觉上是"可折叠的表头"），所以手指落在它上面时，下面那个
     // LazyVerticalGrid 根本收不到手势 —— 收藏一多、这块把可视区盖满，整页就滑不动了。
@@ -319,6 +345,7 @@ fun PinManageScreen(
 
     // 需求 10：切换页面时回顶，但回的是不含收藏的顶，应用/功能在平移的时候自己平移到上面（不含收藏的顶），收藏不跟着平移！
     val switchTab: (Int) -> Unit = { targetPage ->
+        letterScrollJob?.cancel()
         if (pagerState.currentPage != targetPage || model.selectedTab != targetPage) {
             model.selectTab(targetPage)
             coroutineScope.launch {
@@ -568,7 +595,7 @@ fun PinManageScreen(
                             // 聚合支付：内建功能，独立于扫描出的分组之外（用户 2026-10-24：
                             // 「单独拎出来不要和快捷方式摆在一起，放在收藏和字母排序中间」）。
                             // 收藏行为与其他功能一致：管理模式下点击勾选/取消，浏览模式点击执行。
-                            // 它占网格第 0 位，字母条跳转的偏移在 [jumpToFunction] 里同步。
+                            // 它占网格第 0 位，字母条定位和高亮都要把它算进去。
                             item(key = "aggregate_payment", span = { GridItemSpan(1) }) {
                                 val aggregateContext = LocalContext.current
                                 val aggregate = remember(aggregateContext) {
@@ -729,6 +756,7 @@ fun PinManageScreen(
                 val visibleLetter by remember(unpinnedSection) {
                     derivedStateOf {
                         val first = appsGridState.firstVisibleItemIndex
+                        if (headerOffsetPx > -sharedPinsContentHeightPx + 1f) return@derivedStateOf PINNED_GLYPH
                         var cur: String? = null
                         for (i in first downTo 0) {
                             val c = unpinnedSection.getOrNull(i)
@@ -741,21 +769,11 @@ fun PinManageScreen(
                     letters = model.letters,
                     currentLetter = visibleLetter,
                     onLetterSelected = { letter ->
-                        if (letter == PINNED_GLYPH) {
-                            coroutineScope.launch {
-                                Animatable(headerOffsetPx).animateTo(0f) { headerOffsetPx = value }
-                                appsGridState.scrollToItem(0)
-                            }
-                        } else {
-                            coroutineScope.launch {
-                                if (headerOffsetPx > -sharedPinsContentHeightPx) {
-                                    Animatable(headerOffsetPx).animateTo(-sharedPinsContentHeightPx) {
-                                        headerOffsetPx = value
-                                    }
-                                }
-                                jumpTo(appsGridState, unpinnedSection, letter, -(topContentPaddingPx + tabRowHeightPx).toInt())
-                            }
+                        val showPins = letter == PINNED_GLYPH
+                        val index = if (showPins) 0 else unpinnedSection.indexOfFirst {
+                            it is Cell.Label && barGlyph(it.text) == letter
                         }
+                        if (index >= 0) scrollToSection(appsGridState, index, showPins)
                     },
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
@@ -763,10 +781,11 @@ fun PinManageScreen(
                         .zIndex(3f),
                 )
             } else if (model.groupedFunctions.isNotEmpty()) {
-                val fnsVisibleLetter by remember(model.groupedFunctions) {
+                val fnsVisibleLetter by remember(model.groupedFunctions, model.functionLoading) {
                     derivedStateOf {
+                        if (headerOffsetPx > -sharedPinsContentHeightPx + 1f) return@derivedStateOf PINNED_GLYPH
                         val first = fnsGridState.firstVisibleItemIndex
-                        var curIndex = 0
+                        var curIndex = 1 + if (model.functionLoading) 1 else 0
                         var matched = PINNED_GLYPH
                         for (group in model.groupedFunctions) {
                             val groupCount = 1 + group.items.size
@@ -784,21 +803,9 @@ fun PinManageScreen(
                     letters = model.functionLetters,
                     currentLetter = fnsVisibleLetter,
                     onLetterSelected = { letter ->
-                        if (letter == PINNED_GLYPH) {
-                            coroutineScope.launch {
-                                Animatable(headerOffsetPx).animateTo(0f) { headerOffsetPx = value }
-                                fnsGridState.scrollToItem(0)
-                            }
-                        } else {
-                            coroutineScope.launch {
-                                if (headerOffsetPx > -sharedPinsContentHeightPx) {
-                                    Animatable(headerOffsetPx).animateTo(-sharedPinsContentHeightPx) {
-                                        headerOffsetPx = value
-                                    }
-                                }
-                                jumpToFunction(fnsGridState, model, letter, -(topContentPaddingPx + tabRowHeightPx).toInt())
-                            }
-                        }
+                        val showPins = letter == PINNED_GLYPH
+                        val index = if (showPins) 0 else functionSectionIndex(model, letter)
+                        if (index >= 0) scrollToSection(fnsGridState, index, showPins)
                     },
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
@@ -831,7 +838,11 @@ private fun MeasuredHeader(
         if (measuredHeight > 0) {
             onMeasuredHeight(measuredHeight.toFloat())
         }
-        layout(constraints.maxWidth, measuredHeight) {
+        // Keep the viewport-sized wrapper within its parent's constraints. Reporting the
+        // full height here makes Compose center the oversized header in the smaller slot,
+        // while TabRow still uses its unshifted height: many pins then overlap the tabs.
+        // The child was measured unbounded and is explicitly top-aligned inside this slot.
+        layout(constraints.maxWidth, constraints.constrainHeight(measuredHeight)) {
             placeable?.placeRelative(0, 0)
         }
     }
@@ -1701,12 +1712,11 @@ private fun GenericLetterBarOverlay(
 
     AndroidView(
         modifier = modifier,
-        factory = { context ->
-            LetterIndexBar(context).apply {
-                this.onLetterSelected = onLetterSelected
-            }
-        },
+        factory = { context -> LetterIndexBar(context) },
         update = { bar ->
+            // The first composition often has no apps or measured header yet.
+            // Always replace the callback so it sees the current groups and geometry.
+            bar.onLetterSelected = onLetterSelected
             val w = with(density) { 28.dp.roundToPx() }
             bar.minimumWidth = w
             bar.letters = barLetters
@@ -1731,22 +1741,10 @@ private fun barGlyph(section: String): String = when (section) {
     else -> section
 }
 
-private fun jumpTo(
-    gridState: LazyGridState,
-    cells: List<Cell>,
-    letter: String,
-    headerOffsetPx: Int = 0,
-) {
-    val index = cells.indexOfFirst { it is Cell.Label && barGlyph(it.text) == letter }
-    if (index >= 0) gridState.requestScrollToItem(index, headerOffsetPx)
-}
-
-private fun jumpToFunction(
-    gridState: LazyGridState,
+private fun functionSectionIndex(
     model: PinManageModel,
     letter: String,
-    headerOffsetPx: Int = 0,
-) {
+): Int {
     // 网格第 0 位是内建的「聚合支付」格（见 PinManageScreen 功能页），加载中还有一条进度行
     // —— 字母分组都排在这两者后面，跳转下标必须把它们算进去，否则永远差一两个格子。
     var targetIndex = 1 + if (model.functionLoading) 1 else 0
@@ -1754,11 +1752,11 @@ private fun jumpToFunction(
         val ch = group.sortKey.firstOrNull()?.uppercaseChar() ?: '#'
         val groupLetter = if (ch in 'A'..'Z') ch.toString() else "#"
         if (groupLetter == letter) {
-            gridState.requestScrollToItem(targetIndex, headerOffsetPx)
-            return
+            return targetIndex
         }
         targetIndex += (1 + group.items.size)
     }
+    return -1
 }
 
 /**

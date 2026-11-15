@@ -185,15 +185,12 @@ class CornerInputMonitor(
     @Volatile
     private var imeHeightCache = 0
 
-    /**
-     * True while `system_server`'s [LauncherMonitorRegion] has cropped `[Gesture Monitor] swipe-up`
-     * out of the bottom corners (`Settings.Global[bubbledrawer_arbiter_crop_active] == 1`).
-     * When true, `com.miui.home` never receives `ACTION_DOWN` in the corners at all, so we do NOT
-     * need to pre-own (`pilferPointers`) at `ACTION_DOWN` — we stay a pure observer (`mode=cropped`)
-     * and only pilfer on `SpyAction.Activate` once the finger has traveled past the threshold.
-     */
+    /** The actual cropped rectangle and its boot/rotation/expiry, refreshed off the input thread. */
     @Volatile
-    private var arbiterCropActive = false
+    private var arbiterCropState: ArbiterCropState? = null
+
+    @Volatile
+    private var bootCount = -1
 
     /** Returns true only if the display is interactive and the keyguard is NOT locked. */
     private fun isUnlockedAndInteractive(): Boolean = deviceInteractive && !keyguardLocked
@@ -204,13 +201,15 @@ class CornerInputMonitor(
     private fun refreshState() {
         deviceInteractive = runCatching { powerManager?.isInteractive != false }.getOrDefault(true)
         keyguardLocked = runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)
-        arbiterCropActive = runCatching {
-            android.provider.Settings.Global.getInt(
+        bootCount = runCatching {
+            android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, -1)
+        }.getOrDefault(-1)
+        arbiterCropState = runCatching {
+            ArbiterCropState.decode(android.provider.Settings.Global.getString(
                 context.contentResolver,
-                LauncherMonitorRegion.SETTING_ARBITER_CROP_ACTIVE,
-                0,
-            ) == 1
-        }.getOrDefault(false)
+                LauncherMonitorRegion.SETTING_ARBITER_CROP_STATE,
+            ))
+        }.getOrNull()
     }
 
     /**
@@ -1217,7 +1216,11 @@ class CornerInputMonitor(
         // read when a corner swipe goes HOME with the fan.
         val inPreOwnStrip = inPreOwnStrip(y)
         val imePx = imeVisibleHeightPx()
-        val cropped = arbiterCropActive
+        val bounds = displayBounds()
+        val crop = arbiterCropState
+        val cropped = crop?.excludes(
+            x, y, bounds.width(), bounds.height(), liveRotation(), bootCount, ev.downTime,
+        ) == true
         // 当 system_server 已经把桌面的 `[Gesture Monitor] swipe-up` 裁出左右下角时（`cropped == true`），
         // 角落的 ACTION_DOWN 根本不会发给 com.miui.home，因此不再需要在按下瞬间调 `pilferPointers()` 抢跑：
         // 保持纯观察（`owned = false, mode=cropped`），普通点击和短距离滑动全部原封不动留给前景 App，
@@ -1253,6 +1256,7 @@ class CornerInputMonitor(
             Log.INFO,
             "MON_DOWN side=$side x=$x y=$y box=${cornerBoxPx()} band=$inPreOwnStrip " +
                 "ime=${imePx}px mode=$mode " +
+                "cropAge=${crop?.let { ev.downTime - it.confirmedAt } ?: -1} " +
                 "lat=$lat recv=$recv pil=$pil " + boundsForLog(),
             null,
         )
@@ -1387,7 +1391,7 @@ class CornerInputMonitor(
      * launcher's observed band (with its margin) or the sector's own reach.
      */
     private fun inPreOwnStrip(y: Float): Boolean {
-        val bottom = displayBoundsCache.bottom
+        val bottom = displayBounds().bottom
         val reach = maxOf(HOME_GESTURE_BAND_DP * density, edgeExtentPx())
         return y >= bottom - reach
     }

@@ -51,6 +51,14 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:testDebugUnitTest \
+            "-PversionName=${{ steps.v.outputs.name }}" \
+            "-PversionCode=${{ steps.v.outputs.code }}"
+
       - name: Restore signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
@@ -128,6 +136,7 @@ jobs:
           apk=$(ls dist/*.apk)
           unzip -p "$apk" META-INF/xposed/java_init.list | grep -qx 'com.repl.bubbledrawer.xposed.ModuleMain'
           unzip -p "$apk" META-INF/xposed/scope.list | grep -qx 'com.android.systemui'
+          unzip -p "$apk" META-INF/xposed/scope.list | grep -qx 'system'
           echo "LSPosed entry point and scope verified."
 
       - name: Create GitHub Release
